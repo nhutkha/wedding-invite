@@ -1,0 +1,26 @@
+{
+  "name": "wedding-invite",
+  "version": "1.0.0",
+  "description": "Fullstack wedding invitation project",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n web,api -c yellow,cyan \"npm run dev --prefix web\" \"npm run dev --prefix server\"",
+    "dev:web": "npm run dev --prefix web",
+    "dev:api": "npm run dev --prefix server",
+    "build": "npm run build --prefix web",
+    "deploy:firebase": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-firebase.ps1",
+    "customize:template42": "node scripts/customize-template42.mjs",
+    "start": "npm run start --prefix server"
+  },
+  "keywords": [
+    "wedding",
+    "invitation",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

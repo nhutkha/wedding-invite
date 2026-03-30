@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Map Placeholder</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #f3ece8;
+    }
+
+    .map-shell {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      border: 1px solid rgba(120, 96, 85, 0.24);
+      border-radius: 12px;
+      background: radial-gradient(circle at 20% 20%, #fdf6f2 0%, #f3ece8 44%, #e8ddcf 100%);
+      color: #3b3232;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 16px;
+      gap: 8px;
+      overflow: hidden;
+    }
+
+    .pin {
+      width: 44px;
+      height: 44px;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      background: #ca4a5a;
+      position: relative;
+      margin-bottom: 10px;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+    }
+
+    .pin::after {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      top: 13px;
+      left: 13px;
+      background: #fff;
+    }
+
+    .title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .address {
+      font-size: 13px;
+      max-width: 280px;
+      line-height: 1.4;
+    }
+
+    .hint {
+      font-size: 11px;
+      opacity: 0.72;
+    }
+  </style>
+</head>
+<body>
+  <div class="map-shell" aria-label="Wedding location map placeholder">
+    <div class="pin" aria-hidden="true"></div>
+    <div class="title">Wedding Location</div>
+    <div class="address">Ấp 3A, xã Phương Thịnh Đồng Tháp</div>
+    <div class="hint">Map embed replaced by local placeholder for fully local HTML mode.</div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+web/node_modules/
+server/node_modules/
+
+# Build outputs
+web/dist/
+
+# Local env
+.env
+.env.*
+web/.env
+web/.env.*
+server/.env
+server/.env.*
+
+# Local database and logs
+server/data/
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Temporary investigation files
+/tmp-*
+tmp-*.js
+tmp-*.txt
+tmp-*.json
+tmp-*.html
+tmp-next-chunks/

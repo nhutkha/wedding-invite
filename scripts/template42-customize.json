@@ -1,0 +1,27 @@
+{
+  "strict": false,
+  "textReplacements": [
+    {
+      "from": "GROOM_NAME",
+      "to": "NGUYEN VAN A"
+    },
+    {
+      "from": "BRIDE_NAME",
+      "to": "TRAN THI B"
+    },
+    {
+      "from": "18A Ly Van Phuc, P. O Cho Dua, Tp Ha Noi",
+      "to": "123 Duong Moi, Quan 1, TP.HCM"
+    }
+  ],
+  "assetReplacements": [
+    {
+      "from": "/template42-assets/assets.cinelove.me/uploads/ccf73fde-bfb0-4f31-b4f3-685ecf47f6f6.jpg",
+      "to": "/custom-assets/couple-main.jpg"
+    },
+    {
+      "from": "/template42-assets/assets.cinelove.me/uploads/6e71789f-aa4e-4d30-8f45-8cdca45d2c3f.jpg",
+      "to": "/custom-assets/couple-side.jpg"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: wedding-invite-fullstack
+    runtime: node
+    rootDir: .
+    plan: free
+    buildCommand: npm ci && npm ci --prefix web && npm ci --prefix server && npm run build --prefix web
+    startCommand: npm start --prefix server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 10000
