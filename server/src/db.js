@@ -1,60 +1,197 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
-const dataDir = path.join(__dirname, '..', 'data');
-fs.mkdirSync(dataDir, { recursive: true });
+const POSTGRES_URL = String(process.env.DATABASE_URL || '').trim();
+const DATABASE_ENGINE = POSTGRES_URL ? 'postgres' : 'sqlite';
 
-const dbPath = path.join(dataDir, 'wedding.sqlite');
-const db = new Database(dbPath);
+let sqliteDb = null;
+let sqliteStmts = null;
+let pgPool = null;
+let isInitialized = false;
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function resolvePgSsl() {
+  const raw = String(process.env.PGSSL || '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'disable') {
+    return false;
+  }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS invitations (
-    slug TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+  if (raw === '1' || raw === 'true' || raw === 'require') {
+    return { rejectUnauthorized: false };
+  }
 
-  CREATE TABLE IF NOT EXISTS rsvps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    invitation_slug TEXT NOT NULL,
-    guest_name TEXT NOT NULL,
-    attendance TEXT NOT NULL CHECK (attendance IN ('yes', 'no')),
-    guest_count INTEGER NOT NULL CHECK (guest_count >= 0 AND guest_count <= 20),
-    note TEXT,
-    created_at TEXT NOT NULL
-  );
+  if (process.env.NODE_ENV === 'production') {
+    return { rejectUnauthorized: false };
+  }
 
-  CREATE TABLE IF NOT EXISTS wishes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    invitation_slug TEXT NOT NULL,
-    sender_name TEXT NOT NULL,
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
+  return false;
+}
 
-  CREATE TABLE IF NOT EXISTS gifts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    invitation_slug TEXT NOT NULL,
-    sender_name TEXT,
-    gift_type TEXT NOT NULL,
-    amount INTEGER NOT NULL CHECK (amount >= 1),
-    message TEXT,
-    created_at TEXT NOT NULL
-  );
+async function initializePostgresSchema() {
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS invitations (
+      slug TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS analytics_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    invitation_slug TEXT NOT NULL,
-    event_name TEXT NOT NULL,
-    metadata TEXT,
-    created_at TEXT NOT NULL
-  );
-`);
+    CREATE TABLE IF NOT EXISTS rsvps (
+      id BIGSERIAL PRIMARY KEY,
+      invitation_slug TEXT NOT NULL,
+      guest_name TEXT NOT NULL,
+      attendance TEXT NOT NULL CHECK (attendance IN ('yes', 'no')),
+      guest_count INTEGER NOT NULL CHECK (guest_count >= 0 AND guest_count <= 20),
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS wishes (
+      id BIGSERIAL PRIMARY KEY,
+      invitation_slug TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gifts (
+      id BIGSERIAL PRIMARY KEY,
+      invitation_slug TEXT NOT NULL,
+      sender_name TEXT,
+      gift_type TEXT NOT NULL,
+      amount INTEGER NOT NULL CHECK (amount >= 1),
+      message TEXT,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id BIGSERIAL PRIMARY KEY,
+      invitation_slug TEXT NOT NULL,
+      event_name TEXT NOT NULL,
+      metadata JSONB,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+}
+
+function initializeSqliteSchema() {
+  const dataDir = path.join(__dirname, '..', 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const dbPath = path.join(dataDir, 'wedding.sqlite');
+  sqliteDb = new Database(dbPath);
+
+  sqliteDb.pragma('journal_mode = WAL');
+  sqliteDb.pragma('foreign_keys = ON');
+
+  sqliteDb.exec(`
+    CREATE TABLE IF NOT EXISTS invitations (
+      slug TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS rsvps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invitation_slug TEXT NOT NULL,
+      guest_name TEXT NOT NULL,
+      attendance TEXT NOT NULL CHECK (attendance IN ('yes', 'no')),
+      guest_count INTEGER NOT NULL CHECK (guest_count >= 0 AND guest_count <= 20),
+      note TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS wishes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invitation_slug TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gifts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invitation_slug TEXT NOT NULL,
+      sender_name TEXT,
+      gift_type TEXT NOT NULL,
+      amount INTEGER NOT NULL CHECK (amount >= 1),
+      message TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invitation_slug TEXT NOT NULL,
+      event_name TEXT NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  sqliteStmts = {
+    invitationBySlug: sqliteDb.prepare(
+      'SELECT payload FROM invitations WHERE slug = ?'
+    ),
+    stats: {
+      rsvps: sqliteDb.prepare(
+        'SELECT COUNT(*) AS total FROM rsvps WHERE invitation_slug = ?'
+      ),
+      attendees: sqliteDb.prepare(
+        "SELECT COALESCE(SUM(guest_count), 0) AS total FROM rsvps WHERE invitation_slug = ? AND attendance = 'yes'"
+      ),
+      wishes: sqliteDb.prepare(
+        'SELECT COUNT(*) AS total FROM wishes WHERE invitation_slug = ?'
+      ),
+      hearts: sqliteDb.prepare(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM gifts WHERE invitation_slug = ? AND gift_type = 'heart-shot'"
+      ),
+    },
+    insertRsvp: sqliteDb.prepare(
+      'INSERT INTO rsvps (invitation_slug, guest_name, attendance, guest_count, note, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ),
+    insertWish: sqliteDb.prepare(
+      'INSERT INTO wishes (invitation_slug, sender_name, message, created_at) VALUES (?, ?, ?, ?)'
+    ),
+    insertGift: sqliteDb.prepare(
+      'INSERT INTO gifts (invitation_slug, sender_name, gift_type, amount, message, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ),
+    insertAnalytics: sqliteDb.prepare(
+      'INSERT INTO analytics_events (invitation_slug, event_name, metadata, created_at) VALUES (?, ?, ?, ?)'
+    ),
+    listWishes: sqliteDb.prepare(
+      'SELECT id, sender_name, message, created_at FROM wishes WHERE invitation_slug = ? ORDER BY id DESC LIMIT ?'
+    ),
+  };
+}
+
+function parsePayload(rawPayload) {
+  if (typeof rawPayload === 'string') {
+    return JSON.parse(rawPayload);
+  }
+
+  return rawPayload;
+}
+
+function toIsoDate(value) {
+  if (!value) {
+    return new Date().toISOString();
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+
+  return parsed.toISOString();
+}
+
+function assertInitialized() {
+  if (!isInitialized) {
+    throw new Error('Database not initialized. Call initializeDatabase() first.');
+  }
+}
 
 const seedInvitation = {
   slug: 'thiep-cuoi-42-clone',
@@ -159,72 +296,137 @@ const seedInvitation = {
     'https://www.google.com/maps?q=Nam%20Phu%2C%20Thanh%20Tri%2C%20Ha%20Noi&output=embed',
 };
 
-const now = new Date().toISOString();
-const existingInvitation = db
-  .prepare('SELECT slug FROM invitations WHERE slug = ?')
-  .get(seedInvitation.slug);
+async function seedInvitationIfMissing() {
+  const now = new Date().toISOString();
 
-if (!existingInvitation) {
-  db.prepare(
-    'INSERT INTO invitations (slug, payload, created_at, updated_at) VALUES (?, ?, ?, ?)'
-  ).run(seedInvitation.slug, JSON.stringify(seedInvitation), now, now);
+  if (DATABASE_ENGINE === 'postgres') {
+    const existing = await pgPool.query(
+      'SELECT slug FROM invitations WHERE slug = $1 LIMIT 1',
+      [seedInvitation.slug]
+    );
+
+    if (existing.rows.length > 0) {
+      return;
+    }
+
+    await pgPool.query(
+      'INSERT INTO invitations (slug, payload, created_at, updated_at) VALUES ($1, $2::jsonb, $3::timestamptz, $4::timestamptz)',
+      [seedInvitation.slug, JSON.stringify(seedInvitation), now, now]
+    );
+    return;
+  }
+
+  const existing = sqliteDb
+    .prepare('SELECT slug FROM invitations WHERE slug = ?')
+    .get(seedInvitation.slug);
+
+  if (!existing) {
+    sqliteDb
+      .prepare(
+        'INSERT INTO invitations (slug, payload, created_at, updated_at) VALUES (?, ?, ?, ?)'
+      )
+      .run(seedInvitation.slug, JSON.stringify(seedInvitation), now, now);
+  }
 }
 
-const invitationBySlugStmt = db.prepare(
-  'SELECT payload FROM invitations WHERE slug = ?'
-);
-const statsStmt = {
-  rsvps: db.prepare(
-    'SELECT COUNT(*) AS total FROM rsvps WHERE invitation_slug = ?'
-  ),
-  attendees: db.prepare(
-    "SELECT COALESCE(SUM(guest_count), 0) AS total FROM rsvps WHERE invitation_slug = ? AND attendance = 'yes'"
-  ),
-  wishes: db.prepare(
-    'SELECT COUNT(*) AS total FROM wishes WHERE invitation_slug = ?'
-  ),
-  hearts: db.prepare(
-    "SELECT COALESCE(SUM(amount), 0) AS total FROM gifts WHERE invitation_slug = ? AND gift_type = 'heart-shot'"
-  ),
-};
+async function initializeDatabase() {
+  if (isInitialized) {
+    return;
+  }
 
-const insertRsvpStmt = db.prepare(
-  'INSERT INTO rsvps (invitation_slug, guest_name, attendance, guest_count, note, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-);
-const insertWishStmt = db.prepare(
-  'INSERT INTO wishes (invitation_slug, sender_name, message, created_at) VALUES (?, ?, ?, ?)'
-);
-const insertGiftStmt = db.prepare(
-  'INSERT INTO gifts (invitation_slug, sender_name, gift_type, amount, message, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-);
-const insertAnalyticsStmt = db.prepare(
-  'INSERT INTO analytics_events (invitation_slug, event_name, metadata, created_at) VALUES (?, ?, ?, ?)'
-);
-const listWishesStmt = db.prepare(
-  'SELECT id, sender_name, message, created_at FROM wishes WHERE invitation_slug = ? ORDER BY id DESC LIMIT ?'
-);
+  if (DATABASE_ENGINE === 'postgres') {
+    pgPool = new Pool({
+      connectionString: POSTGRES_URL,
+      ssl: resolvePgSsl(),
+    });
 
-function readInvitation(slug) {
-  const row = invitationBySlugStmt.get(slug);
+    await initializePostgresSchema();
+  } else {
+    initializeSqliteSchema();
+  }
+
+  await seedInvitationIfMissing();
+  isInitialized = true;
+  console.log(`[db] Using ${DATABASE_ENGINE} storage`);
+}
+
+function getDatabaseEngine() {
+  return DATABASE_ENGINE;
+}
+
+async function readInvitation(slug) {
+  assertInitialized();
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const invitationResult = await pgPool.query(
+      'SELECT payload FROM invitations WHERE slug = $1 LIMIT 1',
+      [slug]
+    );
+
+    if (invitationResult.rows.length === 0) {
+      return null;
+    }
+
+    const statsResult = await pgPool.query(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM rsvps WHERE invitation_slug = $1) AS rsvp_count,
+          (SELECT COALESCE(SUM(guest_count), 0) FROM rsvps WHERE invitation_slug = $1 AND attendance = 'yes') AS attendees_count,
+          (SELECT COUNT(*) FROM wishes WHERE invitation_slug = $1) AS wishes_count,
+          (SELECT COALESCE(SUM(amount), 0) FROM gifts WHERE invitation_slug = $1 AND gift_type = 'heart-shot') AS hearts_count
+      `,
+      [slug]
+    );
+
+    const payload = parsePayload(invitationResult.rows[0].payload);
+    const stats = statsResult.rows[0];
+
+    return {
+      ...payload,
+      stats: {
+        rsvpCount: Number(stats.rsvp_count || 0),
+        attendingGuests: Number(stats.attendees_count || 0),
+        wishCount: Number(stats.wishes_count || 0),
+        heartCount: Number(stats.hearts_count || 0),
+      },
+    };
+  }
+
+  const row = sqliteStmts.invitationBySlug.get(slug);
   if (!row) {
     return null;
   }
 
-  const payload = JSON.parse(row.payload);
+  const payload = parsePayload(row.payload);
   return {
     ...payload,
     stats: {
-      rsvpCount: statsStmt.rsvps.get(slug).total,
-      attendingGuests: statsStmt.attendees.get(slug).total,
-      wishCount: statsStmt.wishes.get(slug).total,
-      heartCount: statsStmt.hearts.get(slug).total,
+      rsvpCount: sqliteStmts.stats.rsvps.get(slug).total,
+      attendingGuests: sqliteStmts.stats.attendees.get(slug).total,
+      wishCount: sqliteStmts.stats.wishes.get(slug).total,
+      heartCount: sqliteStmts.stats.hearts.get(slug).total,
     },
   };
 }
 
-function createRsvp({ slug, guestName, attendance, guestCount, note }) {
+async function createRsvp({ slug, guestName, attendance, guestCount, note }) {
+  assertInitialized();
+
   const createdAt = new Date().toISOString();
-  const result = insertRsvpStmt.run(
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'INSERT INTO rsvps (invitation_slug, guest_name, attendance, guest_count, note, created_at) VALUES ($1, $2, $3, $4, $5, $6::timestamptz) RETURNING id, created_at',
+      [slug, guestName, attendance, guestCount, note, createdAt]
+    );
+
+    return {
+      id: Number(result.rows[0].id),
+      createdAt: toIsoDate(result.rows[0].created_at),
+    };
+  }
+
+  const result = sqliteStmts.insertRsvp.run(
     slug,
     guestName,
     attendance,
@@ -239,8 +441,26 @@ function createRsvp({ slug, guestName, attendance, guestCount, note }) {
   };
 }
 
-function listWishes(slug, limit = 30) {
-  return listWishesStmt.all(slug, limit).map((row) => ({
+async function listWishes(slug, limit = 30) {
+  assertInitialized();
+
+  const normalizedLimit = Math.max(1, Math.min(Number(limit) || 30, 200));
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'SELECT id, sender_name, message, created_at FROM wishes WHERE invitation_slug = $1 ORDER BY id DESC LIMIT $2',
+      [slug, normalizedLimit]
+    );
+
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      senderName: row.sender_name,
+      message: row.message,
+      createdAt: toIsoDate(row.created_at),
+    }));
+  }
+
+  return sqliteStmts.listWishes.all(slug, normalizedLimit).map((row) => ({
     id: row.id,
     senderName: row.sender_name,
     message: row.message,
@@ -248,9 +468,24 @@ function listWishes(slug, limit = 30) {
   }));
 }
 
-function createWish({ slug, senderName, message }) {
+async function createWish({ slug, senderName, message }) {
+  assertInitialized();
+
   const createdAt = new Date().toISOString();
-  const result = insertWishStmt.run(slug, senderName, message, createdAt);
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'INSERT INTO wishes (invitation_slug, sender_name, message, created_at) VALUES ($1, $2, $3, $4::timestamptz) RETURNING id, created_at',
+      [slug, senderName, message, createdAt]
+    );
+
+    return {
+      id: Number(result.rows[0].id),
+      createdAt: toIsoDate(result.rows[0].created_at),
+    };
+  }
+
+  const result = sqliteStmts.insertWish.run(slug, senderName, message, createdAt);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -258,9 +493,24 @@ function createWish({ slug, senderName, message }) {
   };
 }
 
-function createGift({ slug, senderName, giftType, amount, message }) {
+async function createGift({ slug, senderName, giftType, amount, message }) {
+  assertInitialized();
+
   const createdAt = new Date().toISOString();
-  const result = insertGiftStmt.run(
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'INSERT INTO gifts (invitation_slug, sender_name, gift_type, amount, message, created_at) VALUES ($1, $2, $3, $4, $5, $6::timestamptz) RETURNING id, created_at',
+      [slug, senderName || null, giftType, amount, message || null, createdAt]
+    );
+
+    return {
+      id: Number(result.rows[0].id),
+      createdAt: toIsoDate(result.rows[0].created_at),
+    };
+  }
+
+  const result = sqliteStmts.insertGift.run(
     slug,
     senderName || null,
     giftType,
@@ -275,9 +525,20 @@ function createGift({ slug, senderName, giftType, amount, message }) {
   };
 }
 
-function createAnalyticsEvent({ slug, eventName, metadata }) {
+async function createAnalyticsEvent({ slug, eventName, metadata }) {
+  assertInitialized();
+
   const createdAt = new Date().toISOString();
-  insertAnalyticsStmt.run(
+
+  if (DATABASE_ENGINE === 'postgres') {
+    await pgPool.query(
+      'INSERT INTO analytics_events (invitation_slug, event_name, metadata, created_at) VALUES ($1, $2, $3::jsonb, $4::timestamptz)',
+      [slug, eventName, metadata ? JSON.stringify(metadata) : null, createdAt]
+    );
+    return;
+  }
+
+  sqliteStmts.insertAnalytics.run(
     slug,
     eventName,
     metadata ? JSON.stringify(metadata) : null,
@@ -286,6 +547,8 @@ function createAnalyticsEvent({ slug, eventName, metadata }) {
 }
 
 module.exports = {
+  initializeDatabase,
+  getDatabaseEngine,
   readInvitation,
   createRsvp,
   listWishes,

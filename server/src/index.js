@@ -5,6 +5,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { z } = require('zod');
 const {
+  initializeDatabase,
+  getDatabaseEngine,
   readInvitation,
   createRsvp,
   listWishes,
@@ -212,98 +214,126 @@ function sanitizeFileName(fileName) {
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'wedding-invite-api' });
+  res.json({
+    ok: true,
+    service: 'wedding-invite-api',
+    storage: getDatabaseEngine(),
+  });
 });
 
-app.get('/api/invitation/:slug', (req, res) => {
+app.get('/api/invitation/:slug', async (req, res, next) => {
   const parsed = slugSchema.safeParse(req.params.slug);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  const invitation = readInvitation(parsed.data);
-  if (!invitation) {
-    return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
-  }
+  try {
+    const invitation = await readInvitation(parsed.data);
+    if (!invitation) {
+      return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
+    }
 
-  return res.json(invitation);
+    return res.json(invitation);
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.get('/api/wishes', (req, res) => {
+app.get('/api/wishes', async (req, res, next) => {
   const parsed = slugSchema.safeParse(req.query.slug);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  const wishes = listWishes(parsed.data, 40);
-  return res.json({ wishes });
+  try {
+    const wishes = await listWishes(parsed.data, 40);
+    return res.json({ wishes });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.post('/api/rsvp', (req, res) => {
+app.post('/api/rsvp', async (req, res, next) => {
   const parsed = rsvpSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  const invitation = readInvitation(parsed.data.slug);
-  if (!invitation) {
-    return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
-  }
+  try {
+    const invitation = await readInvitation(parsed.data.slug);
+    if (!invitation) {
+      return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
+    }
 
-  const result = createRsvp(parsed.data);
-  return res.status(201).json({
-    message: 'Xác nhận tham dự đã được ghi nhận.',
-    id: result.id,
-    createdAt: result.createdAt,
-  });
+    const result = await createRsvp(parsed.data);
+    return res.status(201).json({
+      message: 'Xác nhận tham dự đã được ghi nhận.',
+      id: result.id,
+      createdAt: result.createdAt,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.post('/api/wishes', (req, res) => {
+app.post('/api/wishes', async (req, res, next) => {
   const parsed = wishSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  const invitation = readInvitation(parsed.data.slug);
-  if (!invitation) {
-    return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
-  }
+  try {
+    const invitation = await readInvitation(parsed.data.slug);
+    if (!invitation) {
+      return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
+    }
 
-  const result = createWish(parsed.data);
-  return res.status(201).json({
-    message: 'Cảm ơn bạn đã gửi lời chúc.',
-    id: result.id,
-    createdAt: result.createdAt,
-  });
+    const result = await createWish(parsed.data);
+    return res.status(201).json({
+      message: 'Cảm ơn bạn đã gửi lời chúc.',
+      id: result.id,
+      createdAt: result.createdAt,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.post('/api/gifts', (req, res) => {
+app.post('/api/gifts', async (req, res, next) => {
   const parsed = giftSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  const invitation = readInvitation(parsed.data.slug);
-  if (!invitation) {
-    return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
-  }
+  try {
+    const invitation = await readInvitation(parsed.data.slug);
+    if (!invitation) {
+      return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
+    }
 
-  const result = createGift(parsed.data);
-  return res.status(201).json({
-    message: 'Món quà của bạn đã được gửi thành công.',
-    id: result.id,
-    createdAt: result.createdAt,
-  });
+    const result = await createGift(parsed.data);
+    return res.status(201).json({
+      message: 'Món quà của bạn đã được gửi thành công.',
+      id: result.id,
+      createdAt: result.createdAt,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.post('/api/analytics/events', (req, res) => {
+app.post('/api/analytics/events', async (req, res, next) => {
   const parsed = analyticsSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendValidationError(res, parsed);
   }
 
-  createAnalyticsEvent(parsed.data);
-  return res.status(202).json({ ok: true });
+  try {
+    await createAnalyticsEvent(parsed.data);
+    return res.status(202).json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get('/api/template42/setup/config', async (_req, res, next) => {
@@ -548,6 +578,16 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ message: 'Có lỗi hệ thống, vui lòng thử lại.' });
 });
 
-app.listen(port, () => {
-  console.log(`Wedding invite API is running at http://localhost:${port}`);
-});
+async function boot() {
+  try {
+    await initializeDatabase();
+    app.listen(port, () => {
+      console.log(`Wedding invite API is running at http://localhost:${port}`);
+    });
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
+  }
+}
+
+void boot();

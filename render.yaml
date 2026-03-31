@@ -1,3 +1,9 @@
+databases:
+  - name: wedding-invite-db
+    plan: free
+    databaseName: wedding_invite
+    user: wedding_invite
+
 services:
   - type: web
     name: wedding-invite-fullstack
@@ -12,3 +18,9 @@ services:
         value: 20
       - key: PORT
         value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: wedding-invite-db
+          property: connectionString
+      - key: PGSSL
+        value: "true"

@@ -1,6 +1,6 @@
 # Wedding Invite Fullstack
 
-React + Vite frontend with Express + SQLite backend.
+React + Vite frontend with Express backend. Data is persisted with PostgreSQL in production (SQLite fallback for local if `DATABASE_URL` is not set).
 
 Current frontend mode renders the localized Template 42 file (`web/public/template42-localized.html`) and includes a dedicated setup page for non-technical users.
 
@@ -86,6 +86,7 @@ npm run dev
 
 - Frontend: copy `web/.env.example` to `web/.env`
 - Backend: copy `server/.env.example` to `server/.env`
+- For persistent production data, set `DATABASE_URL` (PostgreSQL connection string)
 
 ## API Routes
 
@@ -163,7 +164,7 @@ https://render.com/deploy?repo=https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO
 
 3. Click **Deploy**.
 
-Render reads `render.yaml`, builds frontend (`web/dist`), starts backend, and serves both from one domain.
+Render reads `render.yaml`, provisions a PostgreSQL database, builds frontend (`web/dist`), starts backend, and serves both from one domain.
 
 ### Result
 
@@ -174,6 +175,5 @@ No Firebase step is required in this one-click mode.
 
 ### Important note about free tier
 
-- Current backend uses SQLite local file (`server/data/wedding.sqlite`).
-- On free server platforms, data can reset after restarts/redeploys.
-- For stable long-term RSVP/wishes data, migrate DB to managed service (PostgreSQL/Supabase/Neon) in a later step.
+- RSVP/wishes/gifts now persist on PostgreSQL in Render (via `DATABASE_URL`) so data does not reset like local SQLite.
+- If your Render account cannot create free PostgreSQL in Blueprint, create a free DB on Neon/Supabase and set `DATABASE_URL` manually in Render service environment.
