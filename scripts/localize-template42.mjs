@@ -93,7 +93,7 @@ const LOCAL_MAP_EMBED_HTML = `<!doctype html>
   <div class="map-shell" aria-label="Wedding location map placeholder">
     <div class="pin" aria-hidden="true"></div>
     <div class="title">Wedding Location</div>
-    <div class="address">18A Ly Van Phuc, P. O Cho Dua, Tp Ha Noi</div>
+    <div class="address">Ấp 3A, xã Phương Thịnh Đồng Tháp</div>
     <div class="hint">Map embed replaced by local placeholder for fully local HTML mode.</div>
   </div>
 </body>
@@ -788,6 +788,85 @@ function rewriteRemainingAbsoluteTextUrls(html) {
   });
 }
 
+function escapeHtmlAttribute(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function extractEnvelopeImageFallbackUrl(html) {
+  const urls = [];
+  const styleUrlRegex = /background-image\s*:\s*url\((?:&quot;|["'])?([^\)"']+)(?:&quot;|["'])?\)/gi;
+  let match;
+
+  while ((match = styleUrlRegex.exec(html)) !== null) {
+    const raw = String(match[1] || '').trim().replace(/&amp;/g, '&');
+    if (!raw) {
+      continue;
+    }
+
+    if (!/\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)/i.test(raw)) {
+      continue;
+    }
+
+    if (/wax-seal|audio-\d+\.png|calen_heart/i.test(raw)) {
+      continue;
+    }
+
+    urls.push(raw);
+  }
+
+  const unique = [...new Set(urls)];
+  if (!unique.length) {
+    return '';
+  }
+
+  const strongPreferred = unique.find(
+    (url) =>
+      /\/templates\/assets\//i.test(url) && /\.(?:jpg|jpeg|webp)(?:\?|$)/i.test(url)
+  );
+  if (strongPreferred) {
+    return strongPreferred;
+  }
+
+  const preferred = unique.find((url) => /\/templates\/assets\//i.test(url));
+  if (preferred) {
+    return preferred;
+  }
+
+  return unique[0];
+}
+
+function injectEnvelopeLetterImage(html) {
+  if (/<img[^>]+class="[^"]*\bletter-image\b[^"]*"/i.test(html)) {
+    return html;
+  }
+
+  const imageUrl = extractEnvelopeImageFallbackUrl(html);
+  if (!imageUrl) {
+    return html;
+  }
+
+  const letterBlockRegex = /<div class="([^"]*\bletter\b[^"]*)">\s*<div class="([^"]*\bwords\b[^"]*\bline1\b[^"]*)"><\/div>\s*<div class="([^"]*\bwords\b[^"]*\bline2\b[^"]*)"><\/div>\s*<div class="([^"]*\bwords\b[^"]*\bline3\b[^"]*)"><\/div>\s*<div class="([^"]*\bwords\b[^"]*\bline4\b[^"]*)"><\/div>\s*<\/div>/i;
+  const match = html.match(letterBlockRegex);
+  if (!match) {
+    return html;
+  }
+
+  const letterClass = match[1];
+  const classTokens = `${match[1]} ${match[2]}`.split(/\s+/).filter(Boolean);
+  const jsxClass = classTokens.find((token) => /^jsx-[a-z0-9_-]+$/i.test(token)) || '';
+  const imageClass = `${jsxClass ? `${jsxClass} ` : ''}letter-image`;
+
+  const replacement = `<div class="${letterClass}"><img src="${escapeHtmlAttribute(
+    imageUrl
+  )}" alt="Letter" class="${imageClass}"></div>`;
+
+  return html.replace(letterBlockRegex, replacement);
+}
+
 async function main() {
   await fs.mkdir(ASSET_ROOT, { recursive: true });
 
@@ -840,6 +919,7 @@ async function main() {
 
   html = rewriteAbsoluteUrlsInAttributes(html);
   html = rewriteRemainingAbsoluteTextUrls(html);
+  html = injectEnvelopeLetterImage(html);
 
   if (html.includes('</head>')) {
     html = html.replace('</head>', `${EXTRA_STYLE}\n</head>`);
