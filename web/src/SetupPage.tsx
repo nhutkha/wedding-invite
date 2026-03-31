@@ -58,6 +58,31 @@ function applyItemValueToPreview(
   nextValue: string,
   target: HTMLElement
 ) {
+  if (item.source === 'iframe-src') {
+    target.setAttribute('src', nextValue);
+    return;
+  }
+
+  if (item.source === 'countdown-target') {
+    const normalized = nextValue.trim();
+    if (normalized) {
+      target.setAttribute('data-countdown-target', normalized);
+    } else {
+      target.removeAttribute('data-countdown-target');
+    }
+    return;
+  }
+
+  if (item.source === 'qr-url') {
+    const normalized = nextValue.trim();
+    if (normalized) {
+      target.setAttribute('data-qr-url', normalized);
+    } else {
+      target.removeAttribute('data-qr-url');
+    }
+    return;
+  }
+
   if (item.source === 'text') {
     target.textContent = nextValue;
     return;
@@ -545,6 +570,9 @@ function SetupPage() {
           <a className="setup-editor-link" href="/">
             Xem thiep local
           </a>
+          <a className="setup-editor-link" href="/setup/rsvp?slug=thiep-cuoi-42-clone">
+            Kiem tra RSVP
+          </a>
           <button
             type="button"
             className="setup-editor-ghost"
@@ -726,13 +754,25 @@ function SetupPage() {
 
               <label className="setup-editor-field-label">Gia tri moi</label>
               {selectedItem.type === 'text' ? (
-                <textarea
-                  className="setup-editor-textarea"
-                  value={selectedValue}
-                  onChange={(event) => {
-                    updateDraftValue(selectedItem, event.target.value);
-                  }}
-                />
+                <>
+                  {selectedItem.source === 'countdown-target' ? (
+                    <p className="setup-editor-note">
+                      Dinh dang de xuat: <strong>YYYY-MM-DDTHH:mm:ss+07:00</strong>
+                    </p>
+                  ) : null}
+                  {selectedItem.source === 'qr-url' ? (
+                    <p className="setup-editor-note">
+                      Nhap URL day du, vi du: <strong>https://your-domain.com</strong>
+                    </p>
+                  ) : null}
+                  <textarea
+                    className="setup-editor-textarea"
+                    value={selectedValue}
+                    onChange={(event) => {
+                      updateDraftValue(selectedItem, event.target.value);
+                    }}
+                  />
+                </>
               ) : (
                 <div className="setup-editor-image-box">
                   <input

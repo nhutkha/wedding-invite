@@ -1,0 +1,8 @@
+@font-face {
+  font-family: 'The Artisan';
+  src: url('/template42-assets/assets.cinelove.me/fonts/webfonts/the-artisan/the-artisan.woff2') format('woff2'),
+       url('/template42-assets/assets.cinelove.me/fonts/webfonts/the-artisan/the-artisan.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}

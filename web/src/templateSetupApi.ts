@@ -6,7 +6,13 @@ export interface ReplacementPair {
 export interface TemplateEditorItem {
   id: string;
   type: 'text' | 'image';
-  source: 'text' | 'img-src' | 'background-image';
+  source:
+    | 'text'
+    | 'img-src'
+    | 'background-image'
+    | 'iframe-src'
+    | 'countdown-target'
+    | 'qr-url';
   selector: string;
   nodeId: string;
   value: string;
@@ -60,6 +66,20 @@ export interface TemplateSetupApplyResult {
 export interface TemplateSetupUploadResult {
   message: string;
   publicPath: string;
+}
+
+export interface RsvpSubmissionItem {
+  id: number;
+  invitationSlug: string;
+  guestName: string;
+  attendance: 'yes' | 'no';
+  guestCount: number;
+  note: string;
+  createdAt: string;
+}
+
+export interface RsvpSubmissionResult {
+  items: RsvpSubmissionItem[];
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
@@ -139,4 +159,13 @@ export function uploadTemplateAsset(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function fetchRsvpSubmissions(params: { slug: string; limit?: number }) {
+  const query = new URLSearchParams({
+    slug: params.slug,
+    limit: String(params.limit ?? 300),
+  });
+
+  return request<RsvpSubmissionResult>(`/rsvps?${query.toString()}`);
 }

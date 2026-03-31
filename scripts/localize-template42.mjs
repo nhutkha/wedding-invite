@@ -9,6 +9,9 @@ const OUTPUT_HTML = path.join(WEB_PUBLIC, 'template42-localized.html');
 const LOCAL_PAGE_PUBLIC_PATH = '/template42-localized.html';
 const LOCAL_MAP_EMBED_PUBLIC_PATH = '/template42-map-embed.html';
 const LOCAL_MAP_EMBED_OUTPUT = path.join(WEB_PUBLIC, 'template42-map-embed.html');
+const TMP_NEXT_CHUNKS_DIR = path.join(ROOT, 'tmp-next-chunks');
+const LOCAL_SCRIPT_CACHE_BUSTER = 'v=local-runtime-4';
+const LOCAL_TEMPLATE_API_BASE = '/api';
 
 const SITE_ORIGIN = 'https://cinelove.me';
 const LOCAL_MAP_EMBED_HTML = `<!doctype html>
@@ -481,10 +484,48 @@ const EXTRA_SCRIPT = `
     }
 
     function setupCountdown() {
-      var target = new Date('2026-12-15T10:30:00+07:00').getTime();
+      var defaultTargetIso = '2026-12-15T10:30:00+07:00';
       var countdownBlocks = document.querySelectorAll('.countdown.componentBOX');
 
       if (!countdownBlocks.length) {
+        return;
+      }
+
+      function parseCountdownTarget(rawValue) {
+        var text = String(rawValue || '').trim();
+        if (!text) {
+          return null;
+        }
+
+        if (/^\d+$/.test(text)) {
+          var epochMs = Number(text);
+          if (Number.isFinite(epochMs) && epochMs > 0) {
+            return epochMs;
+          }
+        }
+
+        var parsed = new Date(text).getTime();
+        if (!Number.isNaN(parsed)) {
+          return parsed;
+        }
+
+        return null;
+      }
+
+      var target = parseCountdownTarget(defaultTargetIso);
+
+      countdownBlocks.forEach(function (block) {
+        if (!(block instanceof HTMLElement)) {
+          return;
+        }
+
+        var blockTarget = parseCountdownTarget(block.getAttribute('data-countdown-target'));
+        if (blockTarget !== null) {
+          target = blockTarget;
+        }
+      });
+
+      if (target === null) {
         return;
       }
 
@@ -566,6 +607,314 @@ const EXTRA_SCRIPT = `
 </script>
 `;
 
+const BRANDING_OVERRIDE_STYLE = `
+<style id="template42-branding-style">
+  #app-view-index .watermark,
+  #app-view-index .watermark-content,
+  #app-view-index .watermark-link {
+    display: none !important;
+  }
+
+  .qr-code-popup {
+    display: none !important;
+  }
+
+  #template42-custom-qr-popup {
+    position: fixed;
+    right: 64px;
+    bottom: 64px;
+    z-index: 1200;
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    transition: all 0.25s ease;
+  }
+
+  #template42-custom-qr-popup button {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  #template42-custom-qr-popup[data-expanded="false"] {
+    width: 48px;
+    height: 48px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #template42-custom-qr-popup[data-expanded="true"] {
+    width: 164px;
+    padding: 10px;
+  }
+
+  #template42-custom-qr-popup[data-visible="false"] {
+    display: none !important;
+  }
+
+  #template42-custom-qr-popup .qr-toggle-icon {
+    font-size: 22px;
+    color: #666666;
+    line-height: 1;
+  }
+
+  #template42-custom-qr-popup .qr-card {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #template42-custom-qr-popup[data-expanded="true"] .qr-card {
+    display: flex;
+  }
+
+  #template42-custom-qr-popup .qr-close-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    color: #555555;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  #template42-custom-qr-popup .qr-close-btn:hover {
+    background: #f3f3f3;
+  }
+
+  #template42-custom-qr-popup .qr-image-wrap {
+    margin-top: 10px;
+    padding: 6px;
+    border-radius: 6px;
+    background: #ffffff;
+  }
+
+  #template42-custom-qr-popup .qr-image-wrap img {
+    display: block;
+    width: 120px;
+    height: 120px;
+  }
+
+  #template42-custom-qr-popup .qr-caption {
+    margin: 0;
+    max-width: 120px;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #666666;
+    font-weight: 500;
+  }
+
+  @media (max-width: 1000px) {
+    #template42-custom-qr-popup {
+      display: none !important;
+    }
+  }
+</style>
+`;
+
+const QR_OVERRIDE_SCRIPT = `
+<script id="template42-qr-override-script">
+  (function () {
+    var popupId = 'template42-custom-qr-popup';
+    if (window.__template42QrOverrideReady) {
+      return;
+    }
+    window.__template42QrOverrideReady = true;
+
+    function normalizeQrUrl(rawValue) {
+      var text = String(rawValue || '').trim();
+      if (!text) {
+        return '';
+      }
+
+      try {
+        return new URL(text, window.location.href).toString();
+      } catch {
+        return '';
+      }
+    }
+
+    function readQrTargetUrl() {
+      var htmlUrl = normalizeQrUrl(document.documentElement.getAttribute('data-qr-url'));
+      if (htmlUrl) {
+        return htmlUrl;
+      }
+
+      var bodyUrl = normalizeQrUrl(document.body && document.body.getAttribute('data-qr-url'));
+      if (bodyUrl) {
+        return bodyUrl;
+      }
+
+      return window.location.href;
+    }
+
+    function hideNativeQrPopup() {
+      document.querySelectorAll('.qr-code-popup').forEach(function (node) {
+        if (node instanceof HTMLElement) {
+          node.style.display = 'none';
+        }
+      });
+    }
+
+    function updatePopupVisibility(root) {
+      var shouldShow = window.innerWidth > 1000;
+      root.setAttribute('data-visible', shouldShow ? 'true' : 'false');
+    }
+
+    function buildQrImageUrl(targetUrl) {
+      return 'https://quickchart.io/qr?size=220&margin=1&text=' + encodeURIComponent(targetUrl);
+    }
+
+    function buildQrImageFallbackUrl(targetUrl) {
+      return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(targetUrl);
+    }
+
+    function mountCustomQrPopup() {
+      var existing = document.getElementById(popupId);
+      if (existing instanceof HTMLElement) {
+        updatePopupVisibility(existing);
+        return;
+      }
+
+      var targetUrl = readQrTargetUrl();
+      var root = document.createElement('div');
+      root.id = popupId;
+      root.setAttribute('data-expanded', 'false');
+      root.setAttribute('data-visible', 'true');
+
+      var toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'qr-toggle-btn';
+      toggleBtn.setAttribute('aria-label', 'Open QR code');
+      toggleBtn.innerHTML = '<span class="qr-toggle-icon">QR</span>';
+
+      var card = document.createElement('div');
+      card.className = 'qr-card';
+
+      var closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'qr-close-btn';
+      closeBtn.setAttribute('aria-label', 'Close QR code');
+      closeBtn.textContent = 'x';
+
+      var imageWrap = document.createElement('div');
+      imageWrap.className = 'qr-image-wrap';
+
+      var image = document.createElement('img');
+      image.alt = 'QR code';
+      image.referrerPolicy = 'no-referrer';
+      image.src = buildQrImageUrl(targetUrl);
+      image.addEventListener('error', function () {
+        if (image.dataset.fallbackApplied === '1') {
+          return;
+        }
+
+        image.dataset.fallbackApplied = '1';
+        image.src = buildQrImageFallbackUrl(targetUrl);
+      });
+
+      var caption = document.createElement('p');
+      caption.className = 'qr-caption';
+      caption.textContent = 'Scan QR code to open your website';
+
+      imageWrap.appendChild(image);
+      card.appendChild(closeBtn);
+      card.appendChild(imageWrap);
+      card.appendChild(caption);
+      root.appendChild(toggleBtn);
+      root.appendChild(card);
+
+      function expand() {
+        root.setAttribute('data-expanded', 'true');
+        toggleBtn.setAttribute('aria-label', 'Collapse QR code');
+      }
+
+      function collapse() {
+        root.setAttribute('data-expanded', 'false');
+        toggleBtn.setAttribute('aria-label', 'Open QR code');
+      }
+
+      toggleBtn.addEventListener('click', function () {
+        var expanded = root.getAttribute('data-expanded') === 'true';
+        if (expanded) {
+          collapse();
+          return;
+        }
+
+        expand();
+      });
+
+      closeBtn.addEventListener('click', function () {
+        collapse();
+      });
+
+      window.addEventListener('resize', function () {
+        updatePopupVisibility(root);
+      });
+
+      updatePopupVisibility(root);
+      document.body.appendChild(root);
+    }
+
+    function boot() {
+      hideNativeQrPopup();
+      mountCustomQrPopup();
+
+      if (typeof window.MutationObserver === 'function') {
+        var observer = new MutationObserver(function () {
+          hideNativeQrPopup();
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
+  })();
+</script>
+`;
+
+const EDITOR_MODE_BOOTSTRAP = `
+<script>
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('editor')) {
+      return;
+    }
+
+    function stripRuntimeScripts() {
+      document.querySelectorAll('script[src]').forEach(function (node) {
+        var src = String(node.getAttribute('src') || '');
+        if (/_next\\/static\\//.test(src) || /googletagmanager\\.com/.test(src)) {
+          node.remove();
+        }
+      });
+    }
+
+    var style = document.createElement('style');
+    style.textContent = [
+      '[data-transition-key]{opacity:1 !important;transform:none !important;transition:none !important;}',
+      '.absolute.inset-0.bg-white.z-50.flex.items-center.justify-center{display:none !important;}',
+      '.styles_customScroll__X5r6w{overflow-y:auto !important;touch-action:auto !important;}'
+    ].join('');
+    document.head.appendChild(style);
+
+    stripRuntimeScripts();
+  })();
+</script>
+`;
+
 function toAbsoluteUrl(raw, base = SITE_ORIGIN) {
   if (!raw) {
     return null;
@@ -597,10 +946,6 @@ function mapAbsoluteUrlToLocal(rawValue) {
 
   const decoded = rawValue.replace(/&amp;/g, '&').trim();
 
-  if (/^https?:\/\/maps\.google\.com\/maps/i.test(decoded)) {
-    return LOCAL_MAP_EMBED_PUBLIC_PATH;
-  }
-
   if (/^https?:\/\/cinelove\.me\/template\/thiep-cuoi-42\/?$/i.test(decoded)) {
     return LOCAL_PAGE_PUBLIC_PATH;
   }
@@ -613,21 +958,115 @@ function mapAbsoluteUrlToLocal(rawValue) {
     return toRelativeUrl(decoded);
   }
 
-  if (/^https?:\/\//i.test(decoded)) {
-    return toRelativeUrl(decoded);
-  }
-
   return null;
+}
+
+function safeDecodeUriPath(value) {
+  try {
+    return decodeURI(String(value || ''));
+  } catch {
+    return String(value || '');
+  }
 }
 
 function localPublicPathFromUrl(absoluteUrl) {
   const url = new URL(absoluteUrl);
-  const cleanPath = url.pathname.replace(/^\/+/, '');
+  const cleanPath = safeDecodeUriPath(url.pathname).replace(/^\/+/, '');
   return `/template42-assets/${url.hostname}/${cleanPath}`;
 }
 
 function localFsPathFromPublicPath(publicPath) {
-  return path.join(WEB_PUBLIC, publicPath.replace(/^\//, ''));
+  const relativePublicPath = publicPath.replace(/^\//, '');
+  return path.join(WEB_PUBLIC, safeDecodeUriPath(relativePublicPath));
+}
+
+function localizeWebpackPublicPath(scriptText, hostName) {
+  const localNextRoot = `/template42-assets/${hostName}/_next/`;
+  let nextScriptText = String(scriptText || '');
+
+  // Next webpack runtime assigns public path using r.p="/_next/".
+  // Replace just the assignment expression, keep surrounding delimiters untouched.
+  nextScriptText = nextScriptText.replace(
+    /r\.p\s*=\s*(["'])\/_next\/\1/g,
+    `r.p="${localNextRoot}"`
+  );
+
+  // Repair malformed cached variants where the closing quote before comma was lost.
+  nextScriptText = nextScriptText.replace(
+    /r\.p\s*=\s*"([^"\n]*\/_next\/),/g,
+    'r.p="$1",'
+  );
+
+  // Normalize any already-localized public path to the current host-specific root.
+  nextScriptText = nextScriptText.replace(
+    /r\.p\s*=\s*(["'])\/template42-assets\/[^"']+\/_next\/\1/g,
+    `r.p="${localNextRoot}"`
+  );
+
+  return nextScriptText;
+}
+
+function localizeRuntimeApiBase(scriptText) {
+  let nextScriptText = String(scriptText || '');
+
+  nextScriptText = nextScriptText.replace(
+    /API_URL:\s*"https?:\/\/api\.cinelove\.me\/?"/g,
+    `API_URL:"${LOCAL_TEMPLATE_API_BASE}"`
+  );
+
+  nextScriptText = nextScriptText.replace(
+    /API_URL:\s*'https?:\/\/api\.cinelove\.me\/?'/g,
+    `API_URL:"${LOCAL_TEMPLATE_API_BASE}"`
+  );
+
+  return nextScriptText;
+}
+
+function extractNextMediaPaths(scriptText) {
+  const mediaPathRegex = /\/_next\/static\/media\/[^"'`\s)]+/g;
+  return [...new Set(String(scriptText || '').match(mediaPathRegex) ?? [])];
+}
+
+function localizeRuntimeMediaPaths(scriptText, hostName) {
+  const localMediaRoot = `/template42-assets/${hostName}/_next/static/media/`;
+  let nextScriptText = String(scriptText || '');
+
+  // Normalize absolute and root-relative Next media URLs to local mirrored assets.
+  nextScriptText = nextScriptText.replace(
+    /(["'])https?:\/\/[^"']+\/_next\/static\/media\//g,
+    `$1${localMediaRoot}`
+  );
+
+  nextScriptText = nextScriptText.replace(
+    /(["'])\/_next\/static\/media\//g,
+    `$1${localMediaRoot}`
+  );
+
+  nextScriptText = nextScriptText.replace(
+    /(["'])\/template42-assets\/[^"']+\/_next\/static\/media\//g,
+    `$1${localMediaRoot}`
+  );
+
+  return nextScriptText;
+}
+
+async function mirrorMediaAssetsFromScript(scriptText, hostName) {
+  const mediaPaths = extractNextMediaPaths(scriptText);
+  if (!mediaPaths.length) {
+    return;
+  }
+
+  const hostOrigin = `https://${hostName}`;
+  for (const mediaPath of mediaPaths) {
+    const absoluteMediaUrl = toAbsoluteUrl(mediaPath, hostOrigin);
+    if (!absoluteMediaUrl) {
+      continue;
+    }
+
+    const mediaPublicPath = localPublicPathFromUrl(absoluteMediaUrl);
+    const mediaFsPath = localFsPathFromPublicPath(mediaPublicPath);
+    await downloadBinary(absoluteMediaUrl, mediaFsPath);
+  }
 }
 
 async function ensureDirectoryForFile(filePath) {
@@ -650,6 +1089,25 @@ function buildFallbackUrls(rawUrl) {
 
     if (parsed.hostname === 'cinelove.me' && parsed.pathname.startsWith('/images/')) {
       fallbacks.push(`https://assets.cinelove.me${parsed.pathname}${parsed.search}`);
+    }
+
+    if (
+      parsed.hostname === 'cinelove.me' &&
+      parsed.pathname.startsWith('/_next/static/chunks/') &&
+      parsed.search
+    ) {
+      // Some mirrored chunk URLs include a deployment query string that can 404.
+      // Retry without the query string to fetch the canonical chunk file.
+      fallbacks.push(`https://cinelove.me${parsed.pathname}`);
+    }
+
+    if (
+      parsed.hostname === 'cinelove.me' &&
+      parsed.pathname.startsWith('/_next/static/') &&
+      parsed.search
+    ) {
+      // Manifest files can also carry deployment query strings that are not needed.
+      fallbacks.push(`https://cinelove.me${parsed.pathname}`);
     }
   } catch {
     // Ignore malformed URL and only use the original.
@@ -680,6 +1138,69 @@ async function downloadBinary(url, destination) {
   }
 
   return false;
+}
+
+async function hydrateChunkFromTmpMirror(absoluteUrl, destination) {
+  try {
+    const parsed = new URL(absoluteUrl);
+    if (
+      parsed.hostname !== 'cinelove.me' ||
+      !parsed.pathname.startsWith('/_next/static/chunks/')
+    ) {
+      return false;
+    }
+
+    const targetFile = path.basename(parsed.pathname);
+    if (!targetFile) {
+      return false;
+    }
+
+    const entries = await fs.readdir(TMP_NEXT_CHUNKS_DIR);
+    const matched = entries.find((entry) => entry.includes(targetFile));
+    if (!matched) {
+      return false;
+    }
+
+    const sourcePath = path.join(TMP_NEXT_CHUNKS_DIR, matched);
+    const bytes = await fs.readFile(sourcePath);
+    await ensureDirectoryForFile(destination);
+    await fs.writeFile(destination, bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureNextManifestStub(absoluteUrl, destination) {
+  try {
+    const parsed = new URL(absoluteUrl);
+    if (parsed.hostname !== 'cinelove.me' || !parsed.pathname.startsWith('/_next/static/')) {
+      return false;
+    }
+
+    const fileName = path.basename(parsed.pathname);
+    let stubContent = '';
+
+    if (fileName === '_buildManifest.js') {
+      stubContent = [
+        'self.__BUILD_MANIFEST = self.__BUILD_MANIFEST || {};',
+        'self.__BUILD_MANIFEST_CB && self.__BUILD_MANIFEST_CB();',
+      ].join('\n');
+    } else if (fileName === '_ssgManifest.js') {
+      stubContent = [
+        'self.__SSG_MANIFEST = self.__SSG_MANIFEST || new Set();',
+        'self.__SSG_MANIFEST_CB && self.__SSG_MANIFEST_CB();',
+      ].join('\n');
+    } else {
+      return false;
+    }
+
+    await ensureDirectoryForFile(destination);
+    await fs.writeFile(destination, `${stubContent}\n`, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function processCssLink(href, htmlBaseUrl) {
@@ -736,6 +1257,75 @@ async function processCssLink(href, htmlBaseUrl) {
   };
 }
 
+async function processScriptSrc(src, htmlBaseUrl) {
+  const absoluteUrl = toAbsoluteUrl(src, htmlBaseUrl);
+  if (!absoluteUrl) {
+    return { original: src, replacement: src };
+  }
+
+  const hostName = new URL(absoluteUrl).hostname.toLowerCase();
+  if (hostName.includes('googletagmanager.com')) {
+    return { original: src, replacement: absoluteUrl };
+  }
+
+  const parsedUrl = new URL(absoluteUrl);
+  const scriptFileName = path.basename(parsedUrl.pathname);
+  const isWebpackRuntimeScript =
+    parsedUrl.hostname === 'cinelove.me' &&
+    parsedUrl.pathname.startsWith('/_next/static/chunks/') &&
+    /^webpack-.*\.js$/i.test(scriptFileName);
+
+  const scriptPublicPath = localPublicPathFromUrl(absoluteUrl);
+  const scriptFsPath = localFsPathFromPublicPath(scriptPublicPath);
+
+  if (isWebpackRuntimeScript) {
+    // Always refresh webpack runtime from source to avoid stale malformed cache.
+    await fs.rm(scriptFsPath, { force: true });
+  }
+
+  let downloaded = await downloadBinary(absoluteUrl, scriptFsPath);
+
+  if (!downloaded) {
+    downloaded = await hydrateChunkFromTmpMirror(absoluteUrl, scriptFsPath);
+  }
+
+  if (!downloaded) {
+    downloaded = await ensureNextManifestStub(absoluteUrl, scriptFsPath);
+  }
+
+  if (!downloaded) {
+    return { original: src, replacement: src };
+  }
+
+  try {
+    const scriptText = await fs.readFile(scriptFsPath, 'utf8');
+
+    if (parsedUrl.hostname === 'cinelove.me') {
+      await mirrorMediaAssetsFromScript(scriptText, parsedUrl.hostname);
+    }
+
+    let localizedScriptText = scriptText;
+
+    if (isWebpackRuntimeScript) {
+      localizedScriptText = localizeWebpackPublicPath(localizedScriptText, parsedUrl.hostname);
+    }
+
+    localizedScriptText = localizeRuntimeApiBase(localizedScriptText);
+    localizedScriptText = localizeRuntimeMediaPaths(localizedScriptText, parsedUrl.hostname);
+
+    if (localizedScriptText !== scriptText) {
+      await fs.writeFile(scriptFsPath, localizedScriptText, 'utf8');
+    }
+  } catch {
+    // Ignore post-processing failures and keep downloaded script as-is.
+  }
+
+  return {
+    original: src,
+    replacement: `${scriptPublicPath}?${LOCAL_SCRIPT_CACHE_BUSTER}`,
+  };
+}
+
 async function localizeInlineStyleUrls(html, htmlBaseUrl) {
   const styleUrlRegex = /url\((?:&quot;|["'])?(https?:\/\/[^)"']+?)(?:&quot;|["'])?\)/gi;
   const styleUrls = [];
@@ -786,6 +1376,38 @@ function rewriteRemainingAbsoluteTextUrls(html) {
     const replacement = mapAbsoluteUrlToLocal(rawUrl);
     return replacement ?? rawUrl;
   });
+}
+
+function ensureBodyQrUrlAttribute(html) {
+  if (/\bdata-qr-url\s*=\s*/i.test(html)) {
+    return html;
+  }
+
+  return html.replace(/<body\b([^>]*)>/i, '<body$1 data-qr-url="">');
+}
+
+function injectIntoHeadOnce(html, markerId, snippet) {
+  if (html.includes(`id="${markerId}"`)) {
+    return html;
+  }
+
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${snippet}\n</head>`);
+  }
+
+  return `${snippet}\n${html}`;
+}
+
+function injectBeforeBodyCloseOnce(html, markerId, snippet) {
+  if (html.includes(`id="${markerId}"`)) {
+    return html;
+  }
+
+  if (html.includes('</body>')) {
+    return html.replace('</body>', `${snippet}\n</body>`);
+  }
+
+  return `${html}\n${snippet}`;
 }
 
 function escapeHtmlAttribute(value) {
@@ -872,9 +1494,6 @@ async function main() {
 
   let html = await fs.readFile(SOURCE_HTML, 'utf8');
 
-  // Remove third-party/next runtime scripts. We'll provide local runtime script.
-  html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-
   const cssHrefRegex = /<link[^>]*href="([^"]+\.css[^"]*)"[^>]*>/gi;
   const cssHrefs = [];
   let cssLinkMatch;
@@ -889,6 +1508,24 @@ async function main() {
   }
 
   for (const [original, replacement] of cssReplacements) {
+    const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = html.replace(new RegExp(escaped, 'g'), replacement);
+  }
+
+  const scriptSrcRegex = /<script[^>]*src="([^"]+)"[^>]*>/gi;
+  const scriptSrcs = [];
+  let scriptMatch;
+  while ((scriptMatch = scriptSrcRegex.exec(html)) !== null) {
+    scriptSrcs.push(scriptMatch[1]);
+  }
+
+  const scriptReplacements = new Map();
+  for (const src of [...new Set(scriptSrcs)]) {
+    const mapping = await processScriptSrc(src, SITE_ORIGIN);
+    scriptReplacements.set(mapping.original, mapping.replacement);
+  }
+
+  for (const [original, replacement] of scriptReplacements) {
     const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     html = html.replace(new RegExp(escaped, 'g'), replacement);
   }
@@ -919,16 +1556,19 @@ async function main() {
 
   html = rewriteAbsoluteUrlsInAttributes(html);
   html = rewriteRemainingAbsoluteTextUrls(html);
-  html = injectEnvelopeLetterImage(html);
 
-  if (html.includes('</head>')) {
-    html = html.replace('</head>', `${EXTRA_STYLE}\n</head>`);
-  }
-  if (html.includes('</body>')) {
-    html = html.replace('</body>', `${EXTRA_SCRIPT}\n</body>`);
+  html = ensureBodyQrUrlAttribute(html);
+  html = injectIntoHeadOnce(html, 'template42-branding-style', BRANDING_OVERRIDE_STYLE);
+  html = injectBeforeBodyCloseOnce(
+    html,
+    'template42-qr-override-script',
+    QR_OVERRIDE_SCRIPT
+  );
+
+  if (html.includes('<head>')) {
+    html = html.replace('<head>', `<head>\n${EDITOR_MODE_BOOTSTRAP}\n`);
   }
 
-  await fs.writeFile(LOCAL_MAP_EMBED_OUTPUT, LOCAL_MAP_EMBED_HTML, 'utf8');
   await fs.writeFile(OUTPUT_HTML, html, 'utf8');
   console.log(`Localized template written to ${OUTPUT_HTML}`);
 }

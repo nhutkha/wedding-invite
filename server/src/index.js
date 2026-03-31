@@ -9,6 +9,7 @@ const {
   getDatabaseEngine,
   readInvitation,
   createRsvp,
+  listRsvps,
   listWishes,
   createWish,
   createGift,
@@ -55,6 +56,11 @@ const rsvpSchema = z.object({
   attendance: z.enum(['yes', 'no']),
   guestCount: z.coerce.number().int().min(0).max(20),
   note: z.string().trim().max(300).optional().default(''),
+});
+
+const rsvpListQuerySchema = z.object({
+  slug: slugSchema,
+  limit: z.coerce.number().int().min(1).max(1000).optional().default(300),
 });
 
 const wishSchema = z.object({
@@ -105,6 +111,16 @@ const editorApplySchema = z.object({
     )
     .max(2000),
 });
+
+const LEGACY_API_ORIGIN =
+  process.env.LEGACY_API_ORIGIN || 'https://api.cinelove.me';
+
+const LEGACY_API_PATH_MATCHERS = [
+  /^\/gifts(?:\/|$)/,
+  /^\/messages(?:\/|$)/,
+  /^\/pages(?:\/|$)/,
+  /^\/showcase(?:\/|$)/,
+];
 
 function sendValidationError(res, parsed) {
   return res.status(400).json({
@@ -213,6 +229,125 @@ function sanitizeFileName(fileName) {
     .toLowerCase();
 }
 
+function shouldProxyLegacyApi(pathName) {
+  return LEGACY_API_PATH_MATCHERS.some((matcher) => matcher.test(pathName));
+}
+
+function getLegacyApiFallback(method, pathName) {
+  const normalizedMethod = String(method || '').toUpperCase();
+
+  if (normalizedMethod === 'GET' && pathName === '/gifts/animated-gift') {
+    return { success: true, gifts: [] };
+  }
+
+  if (normalizedMethod === 'GET' && /^\/messages\/[^/]+$/.test(pathName)) {
+    return { success: true, messages: [] };
+  }
+
+  if (
+    normalizedMethod === 'GET' &&
+    /^\/showcase\/messages\/[^/]+$/.test(pathName)
+  ) {
+    return { success: true, messages: [] };
+  }
+
+  if (
+    normalizedMethod === 'GET' &&
+    /^\/showcase\/gifts\/received\/[^/]+$/.test(pathName)
+  ) {
+    return { success: true, gifts: [] };
+  }
+
+  if (normalizedMethod === 'GET' && /^\/pages\/[^/]+\/likes$/.test(pathName)) {
+    return { success: true, likes: 0 };
+  }
+
+  if (normalizedMethod === 'POST' && /^\/pages\/[^/]+\/likes$/.test(pathName)) {
+    return { success: true, likes: 0 };
+  }
+
+  if (normalizedMethod === 'POST' && /^\/pages\/[^/]+\/views$/.test(pathName)) {
+    return { success: true, views: 0 };
+  }
+
+  return null;
+}
+
+async function tryProxyLegacyApi(req, res, next) {
+  const pathName = String(req.path || '/');
+  if (!shouldProxyLegacyApi(pathName)) {
+    return next();
+  }
+
+  const method = String(req.method || 'GET').toUpperCase();
+  const upstreamPath = String(req.originalUrl || '').replace(/^\/api/, '') || pathName;
+  const upstreamUrl = `${LEGACY_API_ORIGIN}${upstreamPath}`;
+
+  const requestHeaders = {
+    Accept: req.get('accept') || 'application/json',
+  };
+
+  const contentType = req.get('content-type');
+  if (contentType) {
+    requestHeaders['Content-Type'] = contentType;
+  }
+
+  const fetchOptions = {
+    method,
+    headers: requestHeaders,
+  };
+
+  if (method !== 'GET' && method !== 'HEAD') {
+    const hasBody =
+      req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+    if (hasBody) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+  }
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, fetchOptions);
+
+    if (!upstreamResponse.ok) {
+      const fallbackData = getLegacyApiFallback(method, pathName);
+      if (fallbackData) {
+        return res.status(200).json(fallbackData);
+      }
+
+      const detail = await upstreamResponse.text();
+      return res.status(upstreamResponse.status).json({
+        success: false,
+        message: 'Legacy API request failed.',
+        status: upstreamResponse.status,
+        detail: detail.slice(0, 500),
+      });
+    }
+
+    const responseContentType = upstreamResponse.headers.get('content-type') || '';
+    res.status(upstreamResponse.status);
+    res.setHeader('x-legacy-api-proxy', 'cinelove');
+
+    if (responseContentType) {
+      res.setHeader('content-type', responseContentType);
+    }
+
+    if (responseContentType.includes('application/json')) {
+      const data = await upstreamResponse.json();
+      return res.send(data);
+    }
+
+    const bytes = Buffer.from(await upstreamResponse.arrayBuffer());
+    return res.send(bytes);
+  } catch (error) {
+    const fallbackData = getLegacyApiFallback(method, pathName);
+    if (fallbackData) {
+      return res.status(200).json(fallbackData);
+    }
+
+    return next(error);
+  }
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -271,6 +406,25 @@ app.post('/api/rsvp', async (req, res, next) => {
       id: result.id,
       createdAt: result.createdAt,
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/rsvps', async (req, res, next) => {
+  const parsed = rsvpListQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return sendValidationError(res, parsed);
+  }
+
+  try {
+    const invitation = await readInvitation(parsed.data.slug);
+    if (!invitation) {
+      return res.status(404).json({ message: 'Không tìm thấy thiệp.' });
+    }
+
+    const items = await listRsvps(parsed.data.slug, parsed.data.limit);
+    return res.json({ items });
   } catch (error) {
     return next(error);
   }
@@ -421,6 +575,7 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
       message: 'Da cap nhat thanh cong tu editor.',
       totalApplied: result.totalApplied,
       report: result.report,
+      runtime: result.runtime,
     });
   } catch (error) {
     if (error && error.code === 'ENOENT') {
@@ -560,6 +715,9 @@ app.post('/api/template42/setup/reset', async (_req, res, next) => {
     return next(error);
   }
 });
+
+// Proxy legacy template runtime API calls to preserve original template behavior.
+app.use('/api', tryProxyLegacyApi);
 
 // Serve built frontend when running as a single fullstack service.
 app.use(express.static(webDistPath));

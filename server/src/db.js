@@ -163,6 +163,9 @@ function initializeSqliteSchema() {
     listWishes: sqliteDb.prepare(
       'SELECT id, sender_name, message, created_at FROM wishes WHERE invitation_slug = ? ORDER BY id DESC LIMIT ?'
     ),
+    listRsvps: sqliteDb.prepare(
+      'SELECT id, invitation_slug, guest_name, attendance, guest_count, note, created_at FROM rsvps WHERE invitation_slug = ? ORDER BY id DESC LIMIT ?'
+    ),
   };
 }
 
@@ -468,6 +471,39 @@ async function listWishes(slug, limit = 30) {
   }));
 }
 
+async function listRsvps(slug, limit = 300) {
+  assertInitialized();
+
+  const normalizedLimit = Math.max(1, Math.min(Number(limit) || 300, 1000));
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'SELECT id, invitation_slug, guest_name, attendance, guest_count, COALESCE(note, \'\') AS note, created_at FROM rsvps WHERE invitation_slug = $1 ORDER BY id DESC LIMIT $2',
+      [slug, normalizedLimit]
+    );
+
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      invitationSlug: row.invitation_slug,
+      guestName: row.guest_name,
+      attendance: row.attendance,
+      guestCount: Number(row.guest_count || 0),
+      note: row.note || '',
+      createdAt: toIsoDate(row.created_at),
+    }));
+  }
+
+  return sqliteStmts.listRsvps.all(slug, normalizedLimit).map((row) => ({
+    id: Number(row.id),
+    invitationSlug: row.invitation_slug,
+    guestName: row.guest_name,
+    attendance: row.attendance,
+    guestCount: Number(row.guest_count || 0),
+    note: row.note || '',
+    createdAt: row.created_at,
+  }));
+}
+
 async function createWish({ slug, senderName, message }) {
   assertInitialized();
 
@@ -551,6 +587,7 @@ module.exports = {
   getDatabaseEngine,
   readInvitation,
   createRsvp,
+  listRsvps,
   listWishes,
   createWish,
   createGift,
