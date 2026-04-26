@@ -87,6 +87,7 @@ npm run dev
 - Frontend: copy `web/.env.example` to `web/.env`
 - Backend: copy `server/.env.example` to `server/.env`
 - For persistent production data, set `DATABASE_URL` (PostgreSQL connection string)
+- Optional: set `TEMPLATE_UPLOAD_MAX_MB` to increase max image upload size for setup editor (default `30` MB)
 
 ## API Routes
 

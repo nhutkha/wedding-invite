@@ -47,8 +47,20 @@ const setupConfigPath = path.join(
 const customAssetsDir = path.join(repoRoot, 'web', 'public', 'custom-assets');
 const preferDistTemplate = process.env.NODE_ENV === 'production';
 
+const DEFAULT_TEMPLATE_UPLOAD_MAX_MB = 30;
+const rawTemplateUploadMaxMb = Number(process.env.TEMPLATE_UPLOAD_MAX_MB);
+const templateUploadMaxMb =
+  Number.isFinite(rawTemplateUploadMaxMb) && rawTemplateUploadMaxMb > 0
+    ? rawTemplateUploadMaxMb
+    : DEFAULT_TEMPLATE_UPLOAD_MAX_MB;
+const templateUploadMaxBytes = Math.floor(templateUploadMaxMb * 1024 * 1024);
+const templateUploadJsonLimitMb = Math.max(
+  5,
+  Math.ceil((templateUploadMaxBytes * 1.4) / (1024 * 1024)) + 2
+);
+
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: `${templateUploadJsonLimitMb}mb` }));
 app.use(morgan('dev'));
 
 const slugSchema = z.string().trim().min(3).max(120);
@@ -677,9 +689,9 @@ app.post('/api/template42/setup/upload', async (req, res, next) => {
       });
     }
 
-    if (bytes.length > 10 * 1024 * 1024) {
+    if (bytes.length > templateUploadMaxBytes) {
       return res.status(400).json({
-        message: 'File vuot qua gioi han 10MB.',
+        message: `File vuot qua gioi han ${templateUploadMaxMb}MB.`,
       });
     }
 
