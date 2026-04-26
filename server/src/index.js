@@ -25,24 +25,27 @@ const app = express();
 const port = Number(process.env.PORT || 8787);
 const repoRoot = path.join(__dirname, '..', '..');
 const webDistPath = path.join(repoRoot, 'web', 'dist');
-const templateHtmlPath = path.join(
+const templateHtmlPublicPath = path.join(
   repoRoot,
   'web',
   'public',
   'template42-localized.html'
 );
-const templateBackupPath = path.join(
+const templateBackupPublicPath = path.join(
   repoRoot,
   'web',
   'public',
   'template42-localized.backup.html'
 );
+const templateHtmlDistPath = path.join(webDistPath, 'template42-localized.html');
+const templateBackupDistPath = path.join(webDistPath, 'template42-localized.backup.html');
 const setupConfigPath = path.join(
   repoRoot,
   'scripts',
   'template42-customize.json'
 );
 const customAssetsDir = path.join(repoRoot, 'web', 'public', 'custom-assets');
+const preferDistTemplate = process.env.NODE_ENV === 'production';
 
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
@@ -227,6 +230,60 @@ function sanitizeFileName(fileName) {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
     .toLowerCase();
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getTemplateActivePaths() {
+  const preferred = preferDistTemplate
+    ? { html: templateHtmlDistPath, backup: templateBackupDistPath }
+    : { html: templateHtmlPublicPath, backup: templateBackupPublicPath };
+  const fallback = preferDistTemplate
+    ? { html: templateHtmlPublicPath, backup: templateBackupPublicPath }
+    : { html: templateHtmlDistPath, backup: templateBackupDistPath };
+
+  if (await pathExists(preferred.html)) {
+    return preferred;
+  }
+
+  return fallback;
+}
+
+async function readActiveTemplateHtml() {
+  const paths = await getTemplateActivePaths();
+  const html = await fs.readFile(paths.html, 'utf8');
+  return {
+    html,
+    paths,
+  };
+}
+
+async function ensureTemplateBackup(currentHtml, paths) {
+  if (await pathExists(paths.backup)) {
+    return;
+  }
+
+  await fs.writeFile(paths.backup, currentHtml, 'utf8');
+}
+
+async function writeTemplateHtmlToActiveAndMirror(updatedHtml, activePaths) {
+  await fs.writeFile(activePaths.html, updatedHtml, 'utf8');
+
+  const mirrorHtmlPath =
+    activePaths.html === templateHtmlDistPath
+      ? templateHtmlPublicPath
+      : templateHtmlDistPath;
+
+  if (await pathExists(mirrorHtmlPath)) {
+    await fs.writeFile(mirrorHtmlPath, updatedHtml, 'utf8');
+  }
 }
 
 function shouldProxyLegacyApi(pathName) {
@@ -519,7 +576,7 @@ app.get('/api/template42/setup/config', async (_req, res, next) => {
 
 app.get('/api/template42/setup/snapshot', async (_req, res, next) => {
   try {
-    const html = await fs.readFile(templateHtmlPath, 'utf8');
+    const { html } = await readActiveTemplateHtml();
     const items = getTemplateEditorItems(html);
     const snapshot = buildTemplateSetupSnapshot(items);
 
@@ -531,7 +588,7 @@ app.get('/api/template42/setup/snapshot', async (_req, res, next) => {
 
 app.get('/api/template42/editor/items', async (_req, res, next) => {
   try {
-    const html = await fs.readFile(templateHtmlPath, 'utf8');
+    const { html } = await readActiveTemplateHtml();
     const items = getTemplateEditorItems(html);
 
     return res.json({
@@ -555,13 +612,8 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
   }
 
   try {
-    const html = await fs.readFile(templateHtmlPath, 'utf8');
-
-    try {
-      await fs.access(templateBackupPath);
-    } catch {
-      await fs.writeFile(templateBackupPath, html, 'utf8');
-    }
+    const { html, paths } = await readActiveTemplateHtml();
+    await ensureTemplateBackup(html, paths);
 
     const result = applyTemplateEditorUpdates(
       html,
@@ -569,7 +621,7 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
       parsed.data.strict
     );
 
-    await fs.writeFile(templateHtmlPath, result.html, 'utf8');
+    await writeTemplateHtmlToActiveAndMirror(result.html, paths);
 
     return res.json({
       message: 'Da cap nhat thanh cong tu editor.',
@@ -651,13 +703,8 @@ app.post('/api/template42/setup/apply', async (req, res, next) => {
   }
 
   try {
-    const html = await fs.readFile(templateHtmlPath, 'utf8');
-
-    try {
-      await fs.access(templateBackupPath);
-    } catch {
-      await fs.writeFile(templateBackupPath, html, 'utf8');
-    }
+    const { html, paths } = await readActiveTemplateHtml();
+    await ensureTemplateBackup(html, paths);
 
     const report = [];
     let updated = html;
@@ -677,7 +724,7 @@ app.post('/api/template42/setup/apply', async (req, res, next) => {
       report
     );
 
-    await fs.writeFile(templateHtmlPath, updated, 'utf8');
+    await writeTemplateHtmlToActiveAndMirror(updated, paths);
     await fs.writeFile(setupConfigPath, JSON.stringify(parsed.data, null, 2), 'utf8');
 
     const totalApplied = report.reduce((sum, item) => sum + item.count, 0);
@@ -699,8 +746,9 @@ app.post('/api/template42/setup/apply', async (req, res, next) => {
 
 app.post('/api/template42/setup/reset', async (_req, res, next) => {
   try {
-    const backup = await fs.readFile(templateBackupPath, 'utf8');
-    await fs.writeFile(templateHtmlPath, backup, 'utf8');
+    const paths = await getTemplateActivePaths();
+    const backup = await fs.readFile(paths.backup, 'utf8');
+    await writeTemplateHtmlToActiveAndMirror(backup, paths);
 
     return res.json({
       message: 'Da khoi phuc template ve ban backup.',

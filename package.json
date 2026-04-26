@@ -9,6 +9,8 @@
     "dev:api": "npm run dev --prefix server",
     "build": "npm run build --prefix web",
     "deploy:firebase": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-firebase.ps1",
+    "db:migrate:postgres": "powershell -ExecutionPolicy Bypass -File ./scripts/migrate-postgres.ps1",
+    "db:migrate:postgres:direct": "node ./scripts/migrate-postgres-direct.mjs",
     "customize:template42": "node scripts/customize-template42.mjs",
     "start": "npm run start --prefix server"
   },

@@ -177,3 +177,46 @@ No Firebase step is required in this one-click mode.
 
 - RSVP/wishes/gifts now persist on PostgreSQL in Render (via `DATABASE_URL`) so data does not reset like local SQLite.
 - If your Render account cannot create free PostgreSQL in Blueprint, create a free DB on Neon/Supabase and set `DATABASE_URL` manually in Render service environment.
+
+## Migrate Render Postgres To Free Neon/Supabase
+
+If your Render PostgreSQL free database is expiring, move data to a free Neon/Supabase PostgreSQL and keep app hosting on Render.
+
+### 1. Create new free PostgreSQL
+
+- Neon: create project and copy connection string.
+- Supabase: create project and copy Postgres connection string.
+
+### 2. Run migration script
+
+From project root:
+
+```bash
+npm run db:migrate:postgres -- -SourceDatabaseUrl "OLD_RENDER_DATABASE_URL" -TargetDatabaseUrl "NEW_NEON_OR_SUPABASE_DATABASE_URL" -KeepBackup
+```
+
+If your machine has no `pg_dump/pg_restore` and Docker daemon is not running, use direct migration via Node:
+
+```bash
+npm run db:migrate:postgres:direct -- --source "OLD_RENDER_DATABASE_URL" --target "NEW_NEON_OR_SUPABASE_DATABASE_URL"
+```
+
+Notes:
+- The script uses local `pg_dump` + `pg_restore` if available.
+- If not installed, it falls back to Docker (`postgres:16`).
+- Backup file default is `./tmp/postgres-migration.dump`.
+
+### 3. Switch Render app to new database
+
+In Render service environment variables:
+
+- Update `DATABASE_URL` with your new Neon/Supabase URL.
+- Set `PGSSL=true`.
+
+Then redeploy the Render web service.
+
+### 4. Validate after deploy
+
+- Open `/api/health` and ensure service is healthy.
+- Submit a test RSVP and verify data appears.
+- Keep old Render DB for 1-2 days before deleting.
