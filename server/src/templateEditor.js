@@ -405,7 +405,7 @@ function applySingleRuntimeUpdate(templateDataObject, update) {
 
   const nextValue = String(update.nextValue ?? '');
 
-  if (update.source === 'text') {
+  if (update.source === 'text' || update.source === 'runtime-text') {
     if (typeof targetProps.text !== 'string') {
       return false;
     }
@@ -755,6 +755,70 @@ function getTemplateEditorItems(html) {
     }
   }
 
+  const $nextData = $('#__NEXT_DATA__').first();
+  const nextDataObject = parseJsonSafe($nextData.text() || $nextData.html() || '');
+  if (nextDataObject && typeof nextDataObject === 'object') {
+    const templateDataEntry = findEncodedTemplateData(nextDataObject);
+    if (templateDataEntry && templateDataEntry.decoded && typeof templateDataEntry.decoded === 'object') {
+      const existingTextNodeIds = new Set(
+        items
+          .filter((item) => item.type === 'text' && item.nodeId)
+          .map((item) => sanitizeTemplateNodeId(item.nodeId))
+      );
+
+      for (const [runtimeNodeId, nodeData] of Object.entries(templateDataEntry.decoded)) {
+        if (!nodeData || typeof nodeData !== 'object') {
+          continue;
+        }
+
+        const nodeProps = nodeData.props;
+        if (!nodeProps || typeof nodeProps !== 'object' || typeof nodeProps.text !== 'string') {
+          continue;
+        }
+
+        const runtimeText = normalizeText(nodeProps.text);
+        if (!runtimeText || runtimeText.length < 2 || runtimeText.length > 120) {
+          continue;
+        }
+
+        if (!/[\p{L}\p{N}]/u.test(runtimeText)) {
+          continue;
+        }
+
+        if (
+          runtimeText.includes('http://') ||
+          runtimeText.includes('https://') ||
+          runtimeText.includes('function') ||
+          runtimeText.includes('jsx-')
+        ) {
+          continue;
+        }
+
+        const normalizedNodeId = sanitizeTemplateNodeId(runtimeNodeId);
+        if (!normalizedNodeId || existingTextNodeIds.has(normalizedNodeId)) {
+          continue;
+        }
+
+        const selector = `runtime-node:${normalizedNodeId}`;
+        const uniqueKey = `runtime-text|${normalizedNodeId}`;
+        if (seen.has(uniqueKey)) {
+          continue;
+        }
+
+        seen.add(uniqueKey);
+        items.push({
+          id: createItemId('runtime-text', selector),
+          type: 'text',
+          source: 'runtime-text',
+          selector,
+          nodeId: normalizedNodeId,
+          value: runtimeText,
+          label: clipText(runtimeText, 52),
+        });
+      }
+    }
+  }
+
   return items;
 }
 
@@ -799,46 +863,48 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
       continue;
     }
 
-    const $target = $(current.selector).first();
-    if ($target.length === 0) {
-      if (strict) {
-        throw new Error(`Khong tim thay selector cho item: ${current.id}`);
-      }
-
-      report.push({
-        id: current.id,
-        label: current.label,
-        source: current.source,
-        nodeId: current.nodeId,
-        count: 0,
-      });
-      continue;
-    }
-
     const nextValue = String(update.value ?? '');
 
-    if (current.source === 'text') {
-      $target.text(nextValue);
-    } else if (current.source === 'img-src') {
-      $target.attr('src', nextValue);
-    } else if (current.source === 'background-image') {
-      const nextStyle = replaceBackgroundImageStyle($target.attr('style'), nextValue);
-      $target.attr('style', nextStyle);
-    } else if (current.source === 'iframe-src') {
-      $target.attr('src', nextValue);
-    } else if (current.source === 'countdown-target') {
-      const normalizedTarget = normalizeText(nextValue);
-      if (normalizedTarget) {
-        $target.attr('data-countdown-target', normalizedTarget);
-      } else {
-        $target.removeAttr('data-countdown-target');
+    if (current.source !== 'runtime-text') {
+      const $target = $(current.selector).first();
+      if ($target.length === 0) {
+        if (strict) {
+          throw new Error(`Khong tim thay selector cho item: ${current.id}`);
+        }
+
+        report.push({
+          id: current.id,
+          label: current.label,
+          source: current.source,
+          nodeId: current.nodeId,
+          count: 0,
+        });
+        continue;
       }
-    } else if (current.source === 'qr-url') {
-      const normalizedQrUrl = normalizeText(nextValue);
-      if (normalizedQrUrl) {
-        $target.attr('data-qr-url', normalizedQrUrl);
-      } else {
-        $target.removeAttr('data-qr-url');
+
+      if (current.source === 'text') {
+        $target.text(nextValue);
+      } else if (current.source === 'img-src') {
+        $target.attr('src', nextValue);
+      } else if (current.source === 'background-image') {
+        const nextStyle = replaceBackgroundImageStyle($target.attr('style'), nextValue);
+        $target.attr('style', nextStyle);
+      } else if (current.source === 'iframe-src') {
+        $target.attr('src', nextValue);
+      } else if (current.source === 'countdown-target') {
+        const normalizedTarget = normalizeText(nextValue);
+        if (normalizedTarget) {
+          $target.attr('data-countdown-target', normalizedTarget);
+        } else {
+          $target.removeAttr('data-countdown-target');
+        }
+      } else if (current.source === 'qr-url') {
+        const normalizedQrUrl = normalizeText(nextValue);
+        if (normalizedQrUrl) {
+          $target.attr('data-qr-url', normalizedQrUrl);
+        } else {
+          $target.removeAttr('data-qr-url');
+        }
       }
     }
 

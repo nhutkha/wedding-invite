@@ -83,7 +83,7 @@ function applyItemValueToPreview(
     return;
   }
 
-  if (item.source === 'text') {
+  if (item.source === 'text' || item.source === 'runtime-text') {
     target.textContent = nextValue;
     return;
   }

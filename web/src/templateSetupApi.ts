@@ -8,6 +8,7 @@ export interface TemplateEditorItem {
   type: 'text' | 'image';
   source:
     | 'text'
+    | 'runtime-text'
     | 'img-src'
     | 'background-image'
     | 'iframe-src'
