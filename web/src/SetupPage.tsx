@@ -148,6 +148,47 @@ function normalizeSearchText(value: string) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+function extractGoogleMapsQuery(rawValue: string) {
+  const normalized = rawValue.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(normalized, 'https://local-template.test');
+    return (
+      parsed.searchParams.get('q') ||
+      parsed.searchParams.get('query') ||
+      parsed.searchParams.get('destination') ||
+      ''
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function buildGoogleMapsOpenUrl(item: TemplateEditorItem, rawValue: string) {
+  const normalized = rawValue.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (item.source === 'iframe-src') {
+    const query = extractGoogleMapsQuery(normalized);
+    if (query) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+    }
+
+    return normalized;
+  }
+
+  if (item.source === 'map-address') {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalized)}`;
+  }
+
+  return '';
+}
+
 function SetupPage() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const itemsRef = useRef<TemplateEditorItem[]>([]);
@@ -443,6 +484,21 @@ function SetupPage() {
       delete next[selectedItem.id];
       return next;
     });
+  }
+
+  function handleOpenSelectedMapOnGoogleMaps() {
+    if (!selectedItem) {
+      return;
+    }
+
+    const lookupValue = getCurrentValue(selectedItem);
+    const url = buildGoogleMapsOpenUrl(selectedItem, lookupValue);
+    if (!url) {
+      setErrorMessage('Khong the mo Google Maps vi gia tri dia chi/link dang rong.');
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 
   async function handleApplyChanges() {
@@ -776,6 +832,12 @@ function SetupPage() {
                       Nhap URL day du, vi du: <strong>https://your-domain.com</strong>
                     </p>
                   ) : null}
+                  {selectedItem.source === 'map-address' ||
+                  selectedItem.source === 'iframe-src' ? (
+                    <p className="setup-editor-note">
+                      Ban co the nhap dia chi hoac link map, sau do bam <strong>Mo Google Maps</strong> de kiem tra nhanh.
+                    </p>
+                  ) : null}
                   <textarea
                     className="setup-editor-textarea"
                     value={selectedValue}
@@ -783,6 +845,18 @@ function SetupPage() {
                       updateDraftValue(selectedItem, event.target.value);
                     }}
                   />
+                  {selectedItem.source === 'map-address' ||
+                  selectedItem.source === 'iframe-src' ? (
+                    <div className="setup-editor-action-row compact">
+                      <button
+                        type="button"
+                        className="setup-editor-ghost"
+                        onClick={handleOpenSelectedMapOnGoogleMaps}
+                      >
+                        Mo Google Maps
+                      </button>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <div className="setup-editor-image-box">
