@@ -127,6 +127,53 @@ function parseCountdownTargetParts(rawValue) {
   };
 }
 
+function parseMapAddressFromEmbedUrl(rawUrl) {
+  const normalized = normalizeText(rawUrl);
+  if (!normalized) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(normalized, 'https://local-template.test');
+    const qValue = parsed.searchParams.get('q') || parsed.searchParams.get('query') || '';
+    if (!qValue) {
+      return '';
+    }
+
+    return normalizeText(qValue);
+  } catch {
+    return '';
+  }
+}
+
+function buildMapEmbedUrlFromAddress(rawUrl, address) {
+  const normalizedAddress = normalizeText(address);
+  if (!normalizedAddress) {
+    return String(rawUrl || '');
+  }
+
+  const fallbackBase = 'https://maps.google.com/maps';
+  const fallbackParams = new URLSearchParams({
+    q: normalizedAddress,
+    t: '',
+    z: '14',
+    ie: 'UTF8',
+    iwloc: '',
+    output: 'embed',
+  });
+
+  try {
+    const parsed = new URL(String(rawUrl || fallbackBase), fallbackBase);
+    parsed.searchParams.set('q', normalizedAddress);
+    if (!parsed.searchParams.has('output')) {
+      parsed.searchParams.set('output', 'embed');
+    }
+    return parsed.toString();
+  } catch {
+    return `${fallbackBase}?${fallbackParams.toString()}`;
+  }
+}
+
 function buildCssSelector($, element) {
   const parts = [];
   let current = element;
@@ -432,6 +479,30 @@ function applySingleRuntimeUpdate(templateDataObject, update) {
 
     targetProps.selectedDate = targetParts.dateText;
     targetProps.selectedTime = targetParts.timeText;
+    return true;
+  }
+
+  if (update.source === 'map-address') {
+    const normalizedAddress = normalizeText(nextValue);
+    if (!normalizedAddress) {
+      return false;
+    }
+
+    if (typeof targetProps.address !== 'string') {
+      return false;
+    }
+
+    targetProps.address = normalizedAddress;
+    return true;
+  }
+
+  if (update.source === 'iframe-src') {
+    const parsedAddress = parseMapAddressFromEmbedUrl(nextValue);
+    if (!parsedAddress || typeof targetProps.address !== 'string') {
+      return false;
+    }
+
+    targetProps.address = parsedAddress;
     return true;
   }
 
@@ -759,10 +830,54 @@ function getTemplateEditorItems(html) {
     }
   }
 
-  const $nextData = $('#__NEXT_DATA__').first();
-  const nextDataObject = parseJsonSafe($nextData.text() || $nextData.html() || '');
+  const nextDataObject = parseJsonSafe($('#__NEXT_DATA__').first().text() || $('#__NEXT_DATA__').first().html() || '');
   if (nextDataObject && typeof nextDataObject === 'object') {
     const templateDataEntry = findEncodedTemplateData(nextDataObject);
+    if (templateDataEntry && templateDataEntry.decoded && typeof templateDataEntry.decoded === 'object') {
+      for (const [runtimeNodeId, nodeData] of Object.entries(templateDataEntry.decoded)) {
+        if (!nodeData || typeof nodeData !== 'object') {
+          continue;
+        }
+
+        const nodeProps = nodeData.props;
+        if (!nodeProps || typeof nodeProps !== 'object' || typeof nodeProps.address !== 'string') {
+          continue;
+        }
+
+        const addressValue = normalizeText(nodeProps.address);
+        if (!addressValue) {
+          continue;
+        }
+
+        const normalizedNodeId = sanitizeTemplateNodeId(runtimeNodeId);
+        if (!normalizedNodeId) {
+          continue;
+        }
+
+        const selector = `runtime-node:${normalizedNodeId}`;
+        const uniqueKey = `map-address|${normalizedNodeId}`;
+        if (seen.has(uniqueKey)) {
+          continue;
+        }
+
+        seen.add(uniqueKey);
+        items.push({
+          id: createItemId('map-address', selector),
+          type: 'text',
+          source: 'map-address',
+          selector,
+          nodeId: normalizedNodeId,
+          value: addressValue,
+          label: `Dia chi ban do: ${clipText(addressValue, 40)}`,
+        });
+      }
+    }
+  }
+
+  const $nextData = $('#__NEXT_DATA__').first();
+  const runtimeNextDataObject = parseJsonSafe($nextData.text() || $nextData.html() || '');
+  if (runtimeNextDataObject && typeof runtimeNextDataObject === 'object') {
+    const templateDataEntry = findEncodedTemplateData(runtimeNextDataObject);
     if (templateDataEntry && templateDataEntry.decoded && typeof templateDataEntry.decoded === 'object') {
       const existingTextNodeIds = new Set(
         items
@@ -867,7 +982,11 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
       continue;
     }
 
-    if (current.source !== 'text' && current.source !== 'runtime-text') {
+    if (
+      current.source !== 'text' &&
+      current.source !== 'runtime-text' &&
+      current.source !== 'map-address'
+    ) {
       continue;
     }
 
@@ -891,6 +1010,24 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
         id: candidate.id,
         value: update.value,
       });
+    }
+
+    if (current.source === 'map-address') {
+      for (const candidate of currentItems) {
+        if (
+          candidate.source !== 'iframe-src' ||
+          candidate.nodeId !== current.nodeId ||
+          seenUpdateIds.has(candidate.id)
+        ) {
+          continue;
+        }
+
+        seenUpdateIds.add(candidate.id);
+        expandedUpdates.push({
+          id: candidate.id,
+          value: buildMapEmbedUrlFromAddress(candidate.value, String(update.value ?? '')),
+        });
+      }
     }
   }
 
@@ -917,7 +1054,7 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
 
     const nextValue = String(update.value ?? '');
 
-    if (current.source !== 'runtime-text') {
+    if (current.source !== 'runtime-text' && current.source !== 'map-address') {
       const $target = $(current.selector).first();
       if ($target.length === 0) {
         if (strict) {

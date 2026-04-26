@@ -13,6 +13,7 @@ export interface TemplateEditorItem {
     | 'background-image'
     | 'iframe-src'
     | 'countdown-target'
+    | 'map-address'
     | 'qr-url';
   selector: string;
   nodeId: string;

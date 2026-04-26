@@ -83,7 +83,11 @@ function applyItemValueToPreview(
     return;
   }
 
-  if (item.source === 'text' || item.source === 'runtime-text') {
+  if (
+    item.source === 'text' ||
+    item.source === 'runtime-text' ||
+    item.source === 'map-address'
+  ) {
     target.textContent = nextValue;
     return;
   }
