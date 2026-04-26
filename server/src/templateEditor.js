@@ -554,6 +554,7 @@ function applyTemplateRuntimeDataUpdates(html, updates) {
 function getTemplateEditorItems(html) {
   const $ = load(html, { decodeEntities: false });
   const $root = $('#root-page-container').length ? $('#root-page-container') : $('body');
+  const birthDatePattern = /^\d{1,2}\/\d{1,2}\/\s?\d{4}$/;
   const blockedTags = new Set([
     'script',
     'style',
@@ -610,6 +611,9 @@ function getTemplateEditorItems(html) {
     }
 
     seen.add(uniqueKey);
+    const textLabel = birthDatePattern.test(text)
+      ? `Ngay sinh: ${clipText(text, 44)}`
+      : clipText(text, 52);
     items.push({
       id: createItemId('text', selector),
       type: 'text',
@@ -617,7 +621,7 @@ function getTemplateEditorItems(html) {
       selector,
       nodeId: getNearestNodeId($, element),
       value: text,
-      label: clipText(text, 52),
+      label: textLabel,
     });
   });
 

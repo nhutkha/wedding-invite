@@ -137,6 +137,13 @@ function findTargetBySelector(doc: Document, selector: string) {
   }
 }
 
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
 function SetupPage() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const itemsRef = useRef<TemplateEditorItem[]>([]);
@@ -169,7 +176,7 @@ function SetupPage() {
   );
 
   const filteredItems = useMemo(() => {
-    const keyword = searchText.trim().toLowerCase();
+    const keyword = normalizeSearchText(searchText.trim());
 
     return items.filter((item) => {
       if (item.type !== activeTab) {
@@ -180,7 +187,7 @@ function SetupPage() {
         return true;
       }
 
-      const targetText = `${item.label} ${item.value} ${item.nodeId}`.toLowerCase();
+      const targetText = normalizeSearchText(`${item.label} ${item.value} ${item.nodeId}`);
       return targetText.includes(keyword);
     });
   }, [activeTab, items, searchText]);
