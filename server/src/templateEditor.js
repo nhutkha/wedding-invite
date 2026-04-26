@@ -842,11 +842,59 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
   const $ = load(html, { decodeEntities: false });
   const currentItems = getTemplateEditorItems(html);
   const itemMap = new Map(currentItems.map((item) => [item.id, item]));
+  const expandedUpdates = [];
+  const seenUpdateIds = new Set();
+
+  for (const update of updates) {
+    if (!update || typeof update !== 'object') {
+      continue;
+    }
+
+    const updateId = String(update.id || '');
+    if (!updateId || seenUpdateIds.has(updateId)) {
+      continue;
+    }
+
+    seenUpdateIds.add(updateId);
+    expandedUpdates.push(update);
+
+    const current = itemMap.get(updateId);
+    if (!current) {
+      continue;
+    }
+
+    if (current.source !== 'text' && current.source !== 'runtime-text') {
+      continue;
+    }
+
+    const currentValue = String(current.value ?? '');
+    if (!currentValue) {
+      continue;
+    }
+
+    for (const candidate of currentItems) {
+      if (
+        (candidate.source !== 'text' && candidate.source !== 'runtime-text') ||
+        candidate.id === current.id ||
+        String(candidate.value ?? '') !== currentValue ||
+        seenUpdateIds.has(candidate.id)
+      ) {
+        continue;
+      }
+
+      seenUpdateIds.add(candidate.id);
+      expandedUpdates.push({
+        id: candidate.id,
+        value: update.value,
+      });
+    }
+  }
+
   const report = [];
   let totalApplied = 0;
   const runtimeUpdates = [];
 
-  for (const [index, update] of updates.entries()) {
+  for (const [index, update] of expandedUpdates.entries()) {
     const current = itemMap.get(update.id);
     if (!current) {
       if (strict) {
