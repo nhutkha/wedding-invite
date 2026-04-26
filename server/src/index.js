@@ -118,6 +118,10 @@ const setupUploadSchema = z.object({
   mimeType: z.string().trim().max(120).optional(),
 });
 
+const setupBinaryUploadSchema = z.object({
+  fileName: z.string().trim().min(1).max(180),
+});
+
 const editorApplySchema = z.object({
   strict: z.boolean().optional().default(true),
   updates: z
@@ -784,61 +788,98 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
   }
 });
 
-app.post('/api/template42/setup/upload', async (req, res, next) => {
-  const parsed = setupUploadSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return sendValidationError(res, parsed);
+app.post(
+  '/api/template42/setup/upload',
+  express.raw({
+    type: ['image/*', 'application/octet-stream'],
+    limit: `${templateUploadMaxMb}mb`,
+  }),
+  async (req, res, next) => {
+    let fileName = '';
+    let bytes = Buffer.alloc(0);
+
+    if (Buffer.isBuffer(req.body)) {
+      const rawFileNameHeader = req.headers['x-file-name'];
+      const encodedFileName = Array.isArray(rawFileNameHeader)
+        ? rawFileNameHeader[0]
+        : rawFileNameHeader;
+      const decodedFileName = encodedFileName
+        ? (() => {
+            try {
+              return decodeURIComponent(encodedFileName);
+            } catch {
+              return encodedFileName;
+            }
+          })()
+        : '';
+      const parsedBinaryMeta = setupBinaryUploadSchema.safeParse({
+        fileName: decodedFileName,
+      });
+
+      if (!parsedBinaryMeta.success) {
+        return sendValidationError(res, parsedBinaryMeta);
+      }
+
+      fileName = parsedBinaryMeta.data.fileName;
+      bytes = req.body;
+    } else {
+      const parsed = setupUploadSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendValidationError(res, parsed);
+      }
+
+      fileName = parsed.data.fileName;
+      const inputBase64 = parsed.data.dataBase64.includes(',')
+        ? parsed.data.dataBase64.split(',').pop() ?? ''
+        : parsed.data.dataBase64;
+      bytes = Buffer.from(inputBase64, 'base64');
+    }
+
+    try {
+      await fs.mkdir(customAssetsDir, { recursive: true });
+
+      const safeNameBase = sanitizeFileName(fileName);
+      const extension = path.extname(safeNameBase);
+      const allowedExtensions = new Set([
+        '.jpg',
+        '.jpeg',
+        '.png',
+        '.webp',
+        '.gif',
+        '.svg',
+      ]);
+
+      if (!safeNameBase || !allowedExtensions.has(extension)) {
+        return res.status(400).json({
+          message: 'Dinh dang anh khong hop le. Chi ho tro jpg, png, webp, gif, svg.',
+        });
+      }
+
+      if (bytes.length === 0 || Number.isNaN(bytes.length)) {
+        return res.status(400).json({
+          message: 'Noi dung file khong hop le.',
+        });
+      }
+
+      if (bytes.length > templateUploadMaxBytes) {
+        return res.status(400).json({
+          message: `File vuot qua gioi han ${templateUploadMaxMb}MB.`,
+        });
+      }
+
+      const outputName = `${Date.now()}-${safeNameBase}`;
+      const outputPath = path.join(customAssetsDir, outputName);
+      await fs.writeFile(outputPath, bytes);
+
+      return res.status(201).json({
+        message: 'Tai anh len thanh cong.',
+        publicPath: `/custom-assets/${outputName}`,
+      });
+    } catch (error) {
+      return next(error);
+    }
   }
-
-  try {
-    await fs.mkdir(customAssetsDir, { recursive: true });
-
-    const safeNameBase = sanitizeFileName(parsed.data.fileName);
-    const extension = path.extname(safeNameBase);
-    const allowedExtensions = new Set([
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.webp',
-      '.gif',
-      '.svg',
-    ]);
-
-    if (!allowedExtensions.has(extension)) {
-      return res.status(400).json({
-        message: 'Dinh dang anh khong hop le. Chi ho tro jpg, png, webp, gif, svg.',
-      });
-    }
-
-    const inputBase64 = parsed.data.dataBase64.includes(',')
-      ? parsed.data.dataBase64.split(',').pop() ?? ''
-      : parsed.data.dataBase64;
-    const bytes = Buffer.from(inputBase64, 'base64');
-
-    if (bytes.length === 0 || Number.isNaN(bytes.length)) {
-      return res.status(400).json({
-        message: 'Noi dung file khong hop le.',
-      });
-    }
-
-    if (bytes.length > templateUploadMaxBytes) {
-      return res.status(400).json({
-        message: `File vuot qua gioi han ${templateUploadMaxMb}MB.`,
-      });
-    }
-
-    const outputName = `${Date.now()}-${safeNameBase}`;
-    const outputPath = path.join(customAssetsDir, outputName);
-    await fs.writeFile(outputPath, bytes);
-
-    return res.status(201).json({
-      message: 'Tai anh len thanh cong.',
-      publicPath: `/custom-assets/${outputName}`,
-    });
-  } catch (error) {
-    return next(error);
-  }
-});
+);
 
 app.post('/api/template42/setup/apply', async (req, res, next) => {
   const parsed = setupApplySchema.safeParse(req.body);

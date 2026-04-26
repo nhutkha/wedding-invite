@@ -14,30 +14,6 @@ interface EditorDocument extends Document {
   __templateSetupClickHandler?: (event: Event) => void;
 }
 
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('Khong doc duoc file.'));
-        return;
-      }
-
-      const base64 = reader.result.includes(',')
-        ? reader.result.split(',')[1] ?? ''
-        : reader.result;
-      resolve(base64);
-    };
-
-    reader.onerror = () => {
-      reject(new Error('Khong doc duoc file.'));
-    };
-
-    reader.readAsDataURL(file);
-  });
-}
-
 function updateBackgroundPreviewStyle(styleText: string, nextUrl: string) {
   const safeUrl = nextUrl.replace(/"/g, '\\"');
   const nextDeclaration = `background-image:url("${safeUrl}")`;
@@ -580,12 +556,7 @@ function SetupPage() {
     setErrorMessage('');
 
     try {
-      const dataBase64 = await readFileAsBase64(file);
-      const result = await uploadTemplateAsset({
-        fileName: file.name,
-        dataBase64,
-        mimeType: file.type,
-      });
+      const result = await uploadTemplateAsset(file);
 
       updateDraftValue(selectedItem, result.publicPath);
       setStatusMessage(`Tai anh len thanh cong: ${result.publicPath}`);

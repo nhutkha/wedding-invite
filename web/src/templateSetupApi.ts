@@ -152,15 +152,32 @@ export function applyTemplateEditorUpdates(payload: {
   });
 }
 
-export function uploadTemplateAsset(payload: {
-  fileName: string;
-  dataBase64: string;
-  mimeType?: string;
-}) {
-  return request<TemplateSetupUploadResult>('/template42/setup/upload', {
+export async function uploadTemplateAsset(file: File) {
+  const response = await fetch(`${API_BASE_URL}/template42/setup/upload`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(file.name),
+    },
+    body: file,
   });
+
+  if (!response.ok) {
+    let message = 'Yeu cau that bai.';
+
+    try {
+      const body = await response.json();
+      if (typeof body?.message === 'string') {
+        message = body.message;
+      }
+    } catch {
+      // Use fallback message.
+    }
+
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<TemplateSetupUploadResult>;
 }
 
 export function fetchRsvpSubmissions(params: { slug: string; limit?: number }) {
