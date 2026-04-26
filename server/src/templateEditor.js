@@ -4,6 +4,10 @@ const LZUTF8 = require('lzutf8');
 
 const IMAGE_PROP_KEYS = ['imgKey', 'imageUrl', 'galleryImageUrl', 'maskShapeImg'];
 const DEFAULT_COUNTDOWN_TARGET = '2026-12-15T10:30:00+07:00';
+const COUPLE_NAME_SYNC_GROUPS = [
+  new Set(['nH7HtbJpq4', 'PKNdPfREuu', 'vbVsmkFNC_']),
+  new Set(['JBgwRLwkbL', 'Z5yYxBQgzB', 'iPjImtIlr4']),
+];
 
 function normalizeText(rawText) {
   return String(rawText || '')
@@ -144,6 +148,40 @@ function parseMapAddressFromEmbedUrl(rawUrl) {
   } catch {
     return '';
   }
+}
+
+function keepHonorificLastNameOnSameLine(rawText) {
+  const value = String(rawText ?? '');
+  const match = value.match(/^(\s*(?:Ong|Ông|Ba|Bà)\s*:\s*)(.+)$/u);
+  if (!match) {
+    return value;
+  }
+
+  const prefix = match[1];
+  const namePart = String(match[2] || '').trim();
+  const words = namePart.split(/\s+/).filter(Boolean);
+  if (words.length < 2) {
+    return value;
+  }
+
+  const tail = `${words[words.length - 2]}\u00A0${words[words.length - 1]}`;
+  const head = words.slice(0, -2);
+  return `${prefix}${[...head, tail].join(' ')}`.trim();
+}
+
+function getCoupleNameSyncGroup(nodeId) {
+  const normalizedNodeId = sanitizeTemplateNodeId(nodeId);
+  if (!normalizedNodeId) {
+    return null;
+  }
+
+  for (const group of COUPLE_NAME_SYNC_GROUPS) {
+    if (group.has(normalizedNodeId)) {
+      return group;
+    }
+  }
+
+  return null;
 }
 
 function buildMapEmbedUrlFromAddress(rawUrl, address) {
@@ -982,36 +1020,6 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
       continue;
     }
 
-    if (
-      current.source !== 'text' &&
-      current.source !== 'runtime-text' &&
-      current.source !== 'map-address'
-    ) {
-      continue;
-    }
-
-    const currentValue = String(current.value ?? '');
-    if (!currentValue) {
-      continue;
-    }
-
-    for (const candidate of currentItems) {
-      if (
-        (candidate.source !== 'text' && candidate.source !== 'runtime-text') ||
-        candidate.id === current.id ||
-        String(candidate.value ?? '') !== currentValue ||
-        seenUpdateIds.has(candidate.id)
-      ) {
-        continue;
-      }
-
-      seenUpdateIds.add(candidate.id);
-      expandedUpdates.push({
-        id: candidate.id,
-        value: update.value,
-      });
-    }
-
     if (current.source === 'map-address') {
       for (const candidate of currentItems) {
         if (
@@ -1028,6 +1036,33 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
           value: buildMapEmbedUrlFromAddress(candidate.value, String(update.value ?? '')),
         });
       }
+      continue;
+    }
+
+    if (current.source !== 'text' && current.source !== 'runtime-text') {
+      continue;
+    }
+
+    const syncGroup = getCoupleNameSyncGroup(current.nodeId);
+    if (!syncGroup) {
+      continue;
+    }
+
+    for (const candidate of currentItems) {
+      if (
+        (candidate.source !== 'text' && candidate.source !== 'runtime-text') ||
+        candidate.id === current.id ||
+        !syncGroup.has(sanitizeTemplateNodeId(candidate.nodeId)) ||
+        seenUpdateIds.has(candidate.id)
+      ) {
+        continue;
+      }
+
+      seenUpdateIds.add(candidate.id);
+      expandedUpdates.push({
+        id: candidate.id,
+        value: update.value,
+      });
     }
   }
 
@@ -1052,7 +1087,10 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
       continue;
     }
 
-    const nextValue = String(update.value ?? '');
+    let nextValue = String(update.value ?? '');
+    if (current.source === 'text' || current.source === 'runtime-text') {
+      nextValue = keepHonorificLastNameOnSameLine(nextValue);
+    }
 
     if (current.source !== 'runtime-text' && current.source !== 'map-address') {
       const $target = $(current.selector).first();
