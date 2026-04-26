@@ -131,6 +131,42 @@ function parseCountdownTargetParts(rawValue) {
   };
 }
 
+function parseCalendarDateValue(rawValue) {
+  const normalized = normalizeText(rawValue);
+  if (!normalized) {
+    return null;
+  }
+
+  const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const vnMatch = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (vnMatch) {
+    const day = vnMatch[1].padStart(2, '0');
+    const month = vnMatch[2].padStart(2, '0');
+    const year = vnMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return formatCountdownDatePart(parsed);
+}
+
+function getCalendarDateValue(rawValue) {
+  const parsed = parseCalendarDateValue(rawValue);
+  if (!parsed) {
+    return '2026-11-28';
+  }
+
+  return parsed;
+}
+
 function parseMapAddressFromEmbedUrl(rawUrl) {
   const normalized = normalizeText(rawUrl);
   if (!normalized) {
@@ -520,6 +556,16 @@ function applySingleRuntimeUpdate(templateDataObject, update) {
     return true;
   }
 
+  if (update.source === 'calendar-date') {
+    const parsedDate = parseCalendarDateValue(nextValue);
+    if (!parsedDate || typeof targetProps.selectedDate !== 'string') {
+      return false;
+    }
+
+    targetProps.selectedDate = `${parsedDate}T00:00:00.000Z`;
+    return true;
+  }
+
   if (update.source === 'map-address') {
     const normalizedAddress = normalizeText(nextValue);
     if (!normalizedAddress) {
@@ -879,12 +925,28 @@ function getTemplateEditorItems(html) {
 
         const nodeProps = nodeData.props;
         if (!nodeProps || typeof nodeProps !== 'object' || typeof nodeProps.address !== 'string') {
-          continue;
-        }
-
-        const addressValue = normalizeText(nodeProps.address);
-        if (!addressValue) {
-          continue;
+          // Continue scanning for other runtime-only editable fields.
+        } else {
+          const addressValue = normalizeText(nodeProps.address);
+          if (addressValue) {
+            const normalizedNodeId = sanitizeTemplateNodeId(runtimeNodeId);
+            if (normalizedNodeId) {
+              const selector = `runtime-node:${normalizedNodeId}`;
+              const uniqueKey = `map-address|${normalizedNodeId}`;
+              if (!seen.has(uniqueKey)) {
+                seen.add(uniqueKey);
+                items.push({
+                  id: createItemId('map-address', selector),
+                  type: 'text',
+                  source: 'map-address',
+                  selector,
+                  nodeId: normalizedNodeId,
+                  value: addressValue,
+                  label: `Dia chi ban do: ${clipText(addressValue, 40)}`,
+                });
+              }
+            }
+          }
         }
 
         const normalizedNodeId = sanitizeTemplateNodeId(runtimeNodeId);
@@ -892,22 +954,26 @@ function getTemplateEditorItems(html) {
           continue;
         }
 
-        const selector = `runtime-node:${normalizedNodeId}`;
-        const uniqueKey = `map-address|${normalizedNodeId}`;
-        if (seen.has(uniqueKey)) {
-          continue;
+        if (
+          typeof nodeProps.selectedDate === 'string' &&
+          !Object.prototype.hasOwnProperty.call(nodeProps, 'selectedTime')
+        ) {
+          const calendarDate = getCalendarDateValue(nodeProps.selectedDate);
+          const selector = `runtime-node:${normalizedNodeId}`;
+          const uniqueKey = `calendar-date|${normalizedNodeId}`;
+          if (!seen.has(uniqueKey)) {
+            seen.add(uniqueKey);
+            items.push({
+              id: createItemId('calendar-date', selector),
+              type: 'text',
+              source: 'calendar-date',
+              selector,
+              nodeId: normalizedNodeId,
+              value: calendarDate,
+              label: `Ngay lich: ${calendarDate}`,
+            });
+          }
         }
-
-        seen.add(uniqueKey);
-        items.push({
-          id: createItemId('map-address', selector),
-          type: 'text',
-          source: 'map-address',
-          selector,
-          nodeId: normalizedNodeId,
-          value: addressValue,
-          label: `Dia chi ban do: ${clipText(addressValue, 40)}`,
-        });
       }
     }
   }
@@ -1092,7 +1158,11 @@ function applyTemplateEditorUpdates(html, updates, strict = true) {
       nextValue = keepHonorificLastNameOnSameLine(nextValue);
     }
 
-    if (current.source !== 'runtime-text' && current.source !== 'map-address') {
+    if (
+      current.source !== 'runtime-text' &&
+      current.source !== 'map-address' &&
+      current.source !== 'calendar-date'
+    ) {
       const $target = $(current.selector).first();
       if ($target.length === 0) {
         if (strict) {
