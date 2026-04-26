@@ -72,6 +72,12 @@ async function initializePostgresSchema() {
       metadata JSONB,
       created_at TIMESTAMPTZ NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS app_state (
+      state_key TEXT PRIMARY KEY,
+      state_value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
   `);
 }
 
@@ -128,6 +134,12 @@ function initializeSqliteSchema() {
       metadata TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS app_state (
+      state_key TEXT PRIMARY KEY,
+      state_value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   sqliteStmts = {
@@ -165,6 +177,17 @@ function initializeSqliteSchema() {
     ),
     listRsvps: sqliteDb.prepare(
       'SELECT id, invitation_slug, guest_name, attendance, guest_count, note, created_at FROM rsvps WHERE invitation_slug = ? ORDER BY id DESC LIMIT ?'
+    ),
+    appStateByKey: sqliteDb.prepare(
+      'SELECT state_value FROM app_state WHERE state_key = ? LIMIT 1'
+    ),
+    upsertAppState: sqliteDb.prepare(
+      `
+        INSERT INTO app_state (state_key, state_value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(state_key)
+        DO UPDATE SET state_value = excluded.state_value, updated_at = excluded.updated_at
+      `
     ),
   };
 }
@@ -582,6 +605,52 @@ async function createAnalyticsEvent({ slug, eventName, metadata }) {
   );
 }
 
+async function readAppState(stateKey, fallbackValue = null) {
+  assertInitialized();
+
+  if (DATABASE_ENGINE === 'postgres') {
+    const result = await pgPool.query(
+      'SELECT state_value FROM app_state WHERE state_key = $1 LIMIT 1',
+      [stateKey]
+    );
+
+    if (result.rows.length === 0) {
+      return fallbackValue;
+    }
+
+    return parsePayload(result.rows[0].state_value);
+  }
+
+  const row = sqliteStmts.appStateByKey.get(stateKey);
+  if (!row) {
+    return fallbackValue;
+  }
+
+  return parsePayload(row.state_value);
+}
+
+async function writeAppState(stateKey, value) {
+  assertInitialized();
+
+  const now = new Date().toISOString();
+  const serialized = JSON.stringify(value ?? null);
+
+  if (DATABASE_ENGINE === 'postgres') {
+    await pgPool.query(
+      `
+        INSERT INTO app_state (state_key, state_value, updated_at)
+        VALUES ($1, $2::jsonb, $3::timestamptz)
+        ON CONFLICT(state_key)
+        DO UPDATE SET state_value = EXCLUDED.state_value, updated_at = EXCLUDED.updated_at
+      `,
+      [stateKey, serialized, now]
+    );
+    return;
+  }
+
+  sqliteStmts.upsertAppState.run(stateKey, serialized, now);
+}
+
 module.exports = {
   initializeDatabase,
   getDatabaseEngine,
@@ -592,4 +661,6 @@ module.exports = {
   createWish,
   createGift,
   createAnalyticsEvent,
+  readAppState,
+  writeAppState,
 };

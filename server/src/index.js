@@ -14,6 +14,8 @@ const {
   createWish,
   createGift,
   createAnalyticsEvent,
+  readAppState,
+  writeAppState,
 } = require('./db');
 const {
   getTemplateEditorItems,
@@ -46,6 +48,7 @@ const setupConfigPath = path.join(
 );
 const customAssetsDir = path.join(repoRoot, 'web', 'public', 'custom-assets');
 const preferDistTemplate = process.env.NODE_ENV === 'production';
+const TEMPLATE_EDITOR_STATE_KEY = 'template42-editor-state-v1';
 
 const DEFAULT_TEMPLATE_UPLOAD_MAX_MB = 30;
 const rawTemplateUploadMaxMb = Number(process.env.TEMPLATE_UPLOAD_MAX_MB);
@@ -296,6 +299,99 @@ async function writeTemplateHtmlToActiveAndMirror(updatedHtml, activePaths) {
   if (await pathExists(mirrorHtmlPath)) {
     await fs.writeFile(mirrorHtmlPath, updatedHtml, 'utf8');
   }
+}
+
+function createTemplateItemStateKey(item) {
+  return `${String(item?.source || '')}|${String(item?.nodeId || '')}|${String(item?.selector || '')}`;
+}
+
+function normalizeTemplateEditorState(rawValue) {
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+
+  return rawValue
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => ({
+      id: String(entry.id || ''),
+      source: String(entry.source || ''),
+      nodeId: String(entry.nodeId || ''),
+      selector: String(entry.selector || ''),
+      value: String(entry.value ?? ''),
+    }))
+    .filter((entry) => entry.source && entry.selector);
+}
+
+async function loadPersistedTemplateEditorState() {
+  const raw = await readAppState(TEMPLATE_EDITOR_STATE_KEY, []);
+  return normalizeTemplateEditorState(raw);
+}
+
+async function savePersistedTemplateEditorState(entries) {
+  await writeAppState(TEMPLATE_EDITOR_STATE_KEY, normalizeTemplateEditorState(entries));
+}
+
+function overlayTemplateItemsWithPersistedValues(items, persistedEntries) {
+  const byId = new Map();
+  const bySignature = new Map();
+
+  for (const entry of persistedEntries) {
+    if (entry.id) {
+      byId.set(entry.id, entry.value);
+    }
+
+    bySignature.set(createTemplateItemStateKey(entry), entry.value);
+  }
+
+  return items.map((item) => {
+    const byItemId = byId.get(item.id);
+    if (typeof byItemId === 'string') {
+      return {
+        ...item,
+        value: byItemId,
+      };
+    }
+
+    const byItemSignature = bySignature.get(createTemplateItemStateKey(item));
+    if (typeof byItemSignature === 'string') {
+      return {
+        ...item,
+        value: byItemSignature,
+      };
+    }
+
+    return item;
+  });
+}
+
+function resolvePersistedEntriesToUpdates(items, persistedEntries) {
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const itemBySignature = new Map(items.map((item) => [createTemplateItemStateKey(item), item]));
+  const updates = [];
+  const seen = new Set();
+
+  for (const entry of persistedEntries) {
+    const matchedItem = itemById.get(entry.id) || itemBySignature.get(createTemplateItemStateKey(entry));
+    if (!matchedItem) {
+      continue;
+    }
+
+    if (String(matchedItem.value) === String(entry.value)) {
+      continue;
+    }
+
+    if (seen.has(matchedItem.id)) {
+      continue;
+    }
+
+    seen.add(matchedItem.id);
+    updates.push({
+      id: matchedItem.id,
+      value: String(entry.value),
+    });
+  }
+
+  return updates;
 }
 
 function shouldProxyLegacyApi(pathName) {
@@ -590,7 +686,9 @@ app.get('/api/template42/setup/snapshot', async (_req, res, next) => {
   try {
     const { html } = await readActiveTemplateHtml();
     const items = getTemplateEditorItems(html);
-    const snapshot = buildTemplateSetupSnapshot(items);
+    const persistedState = await loadPersistedTemplateEditorState();
+    const effectiveItems = overlayTemplateItemsWithPersistedValues(items, persistedState);
+    const snapshot = buildTemplateSetupSnapshot(effectiveItems);
 
     return res.json(snapshot);
   } catch (error) {
@@ -602,9 +700,11 @@ app.get('/api/template42/editor/items', async (_req, res, next) => {
   try {
     const { html } = await readActiveTemplateHtml();
     const items = getTemplateEditorItems(html);
+    const persistedState = await loadPersistedTemplateEditorState();
+    const effectiveItems = overlayTemplateItemsWithPersistedValues(items, persistedState);
 
     return res.json({
-      items,
+      items: effectiveItems,
     });
   } catch (error) {
     if (error && error.code === 'ENOENT') {
@@ -626,6 +726,8 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
   try {
     const { html, paths } = await readActiveTemplateHtml();
     await ensureTemplateBackup(html, paths);
+    const currentItems = getTemplateEditorItems(html);
+    const currentById = new Map(currentItems.map((item) => [item.id, item]));
 
     const result = applyTemplateEditorUpdates(
       html,
@@ -634,6 +736,36 @@ app.post('/api/template42/editor/apply', async (req, res, next) => {
     );
 
     await writeTemplateHtmlToActiveAndMirror(result.html, paths);
+
+    const persistedState = await loadPersistedTemplateEditorState();
+    const persistedMap = new Map(
+      persistedState.map((entry) => [createTemplateItemStateKey(entry), entry])
+    );
+
+    for (const update of parsed.data.updates) {
+      const currentItem = currentById.get(update.id);
+      if (!currentItem) {
+        continue;
+      }
+
+      const key = createTemplateItemStateKey(currentItem);
+      const nextValue = String(update.value ?? '');
+
+      if (nextValue === String(currentItem.value ?? '')) {
+        persistedMap.delete(key);
+        continue;
+      }
+
+      persistedMap.set(key, {
+        id: currentItem.id,
+        source: currentItem.source,
+        nodeId: currentItem.nodeId,
+        selector: currentItem.selector,
+        value: nextValue,
+      });
+    }
+
+    await savePersistedTemplateEditorState([...persistedMap.values()]);
 
     return res.json({
       message: 'Da cap nhat thanh cong tu editor.',
@@ -738,6 +870,7 @@ app.post('/api/template42/setup/apply', async (req, res, next) => {
 
     await writeTemplateHtmlToActiveAndMirror(updated, paths);
     await fs.writeFile(setupConfigPath, JSON.stringify(parsed.data, null, 2), 'utf8');
+    await savePersistedTemplateEditorState([]);
 
     const totalApplied = report.reduce((sum, item) => sum + item.count, 0);
     return res.json({
@@ -761,6 +894,7 @@ app.post('/api/template42/setup/reset', async (_req, res, next) => {
     const paths = await getTemplateActivePaths();
     const backup = await fs.readFile(paths.backup, 'utf8');
     await writeTemplateHtmlToActiveAndMirror(backup, paths);
+    await savePersistedTemplateEditorState([]);
 
     return res.json({
       message: 'Da khoi phuc template ve ban backup.',
@@ -778,6 +912,24 @@ app.post('/api/template42/setup/reset', async (_req, res, next) => {
 
 // Proxy legacy template runtime API calls to preserve original template behavior.
 app.use('/api', tryProxyLegacyApi);
+
+app.get('/template42-localized.html', async (_req, res, next) => {
+  try {
+    const { html } = await readActiveTemplateHtml();
+    const items = getTemplateEditorItems(html);
+    const persistedState = await loadPersistedTemplateEditorState();
+    const persistedUpdates = resolvePersistedEntriesToUpdates(items, persistedState);
+
+    if (persistedUpdates.length === 0) {
+      return res.type('html').send(html);
+    }
+
+    const result = applyTemplateEditorUpdates(html, persistedUpdates, false);
+    return res.type('html').send(result.html);
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // Serve built frontend when running as a single fullstack service.
 app.use(express.static(webDistPath));

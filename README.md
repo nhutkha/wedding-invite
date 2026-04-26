@@ -177,6 +177,7 @@ No Firebase step is required in this one-click mode.
 ### Important note about free tier
 
 - RSVP/wishes/gifts now persist on PostgreSQL in Render (via `DATABASE_URL`) so data does not reset like local SQLite.
+- Template text/image edits from `/setup` are persisted in database and kept after redeploy (ensure `DATABASE_URL` is set in production).
 - If your Render account cannot create free PostgreSQL in Blueprint, create a free DB on Neon/Supabase and set `DATABASE_URL` manually in Render service environment.
 
 ## Migrate Render Postgres To Free Neon/Supabase
