@@ -30,6 +30,25 @@
 
 <script>
   (function () {
+    // Disable runtime anti-devtools probes that rely on Function('debugger').
+    var NativeFunction = window.Function;
+    function SafeFunction() {
+      var args = Array.prototype.slice.call(arguments);
+      var lastArg = args.length ? String(args[args.length - 1]) : '';
+      var compact = lastArg.replace(/\s+/g, '').toLowerCase();
+
+      if (compact === 'debugger') {
+        return function () {};
+      }
+
+      return NativeFunction.apply(this, args);
+    }
+
+    SafeFunction.prototype = NativeFunction.prototype;
+    Object.setPrototypeOf(SafeFunction, NativeFunction);
+    window.Function = SafeFunction;
+    Function.prototype.constructor = SafeFunction;
+
     function isDevtoolsShortcut(event) {
       var key = String(event.key || '').toLowerCase();
       var code = String(event.code || '').toLowerCase();
@@ -67,6 +86,25 @@
       // Keep browser context menu available even if runtime tries to disable it.
       event.stopImmediatePropagation();
     }, true);
+
+    function restorePageInteractivity() {
+      if (document.body) {
+        document.body.style.filter = '';
+        document.body.style.pointerEvents = '';
+        document.body.style.userSelect = '';
+      }
+
+      var overlays = document.querySelectorAll('div');
+      overlays.forEach(function (node) {
+        var text = (node.textContent || '').toLowerCase();
+        if (text.indexOf('developer tools') !== -1 && text.indexOf('không được phép') !== -1) {
+          node.remove();
+        }
+      });
+    }
+
+    restorePageInteractivity();
+    setInterval(restorePageInteractivity, 200);
   })();
 </script>
 
