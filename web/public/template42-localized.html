@@ -28,6 +28,48 @@
   })();
 </script>
 
+<script>
+  (function () {
+    function isDevtoolsShortcut(event) {
+      var key = String(event.key || '').toLowerCase();
+      var code = String(event.code || '').toLowerCase();
+
+      if (key === 'f12' || code === 'f12' || event.keyCode === 123) {
+        return true;
+      }
+
+      var ctrlOrMeta = !!(event.ctrlKey || event.metaKey);
+      if (!ctrlOrMeta) {
+        return false;
+      }
+
+      if (event.shiftKey && (key === 'i' || key === 'j' || key === 'c')) {
+        return true;
+      }
+
+      if (key === 'u') {
+        return true;
+      }
+
+      return false;
+    }
+
+    document.addEventListener('keydown', function (event) {
+      if (!isDevtoolsShortcut(event)) {
+        return;
+      }
+
+      // Run in capture phase so anti-devtools handlers loaded later cannot block it.
+      event.stopImmediatePropagation();
+    }, true);
+
+    document.addEventListener('contextmenu', function (event) {
+      // Keep browser context menu available even if runtime tries to disable it.
+      event.stopImmediatePropagation();
+    }, true);
+  })();
+</script>
+
 
   <meta charset="utf-8" data-next-head="">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" data-next-head="">
